@@ -11,3 +11,4 @@ fastapi>=0.115.0
 uvicorn>=0.30.0
 aiortc>=1.15.0
 av>=17.1.0
+python-multipart>=0.0.9

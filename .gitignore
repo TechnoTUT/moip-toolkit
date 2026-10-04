@@ -6,3 +6,5 @@ __pycache__/
 dist/
 frontend/dist
 node_modules/
+data/signage/*
+!data/signage/.gitkeep

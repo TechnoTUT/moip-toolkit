@@ -78,6 +78,14 @@ $ uv run main.py tx
 $ uv run main.py tx --list-devices
 ```
 
+### 4. デジタルサイネージ (Signage)
+Web UI（ブラウザ画面の「Digital Signage」タブ）から画像をアップロードし、接続されたローカルディスプレイに直接全画面表示（アスペクト比維持）できます。  
+CLIから直接画像ファイルを指定して全画面表示することも可能です:
+```bash
+$ uv run main.py signage -i /path/to/image.png --fullscreen
+```
+*(※`-i` を省略した場合は、Web UI等でアップロードされた最新の画像が表示されます)*
+
 ---
 
 ## ディレクトリ構成
@@ -85,19 +93,29 @@ $ uv run main.py tx --list-devices
 utone-ndi-utils/
 ├── core/                   # 低レベル共通コアロジック
 │   ├── rx.py               # SDL2初期化、OpenGL描画、フレーム同期、NDI受信定義
-│   └── tx.py               # カメラ取得スレッド、映像/音声NDI送信スレッド
+│   ├── tx.py               # カメラ取得スレッド、映像/音声NDI送信スレッド
+│   ├── multiview.py        # 複数NDIグリッド表示ロジック
+│   └── signage.py          # SDL2レンダラーによる画像サイネージ描画
 ├── cli/                    # コマンドラインUI定義
 │   ├── menu.py             # 対話型NDIソース選択メニュー
 │   ├── rx_cmd.py           # rx コマンド定義
-│   └── tx_cmd.py           # tx コマンド定義
+│   ├── tx_cmd.py           # tx コマンド定義
+│   ├── multiview_cmd.py    # multiview コマンド定義
+│   └── signage_cmd.py      # signage コマンド定義
 ├── backend/                # FastAPI Web API & プロセス制御
 │   ├── models.py           # Pydantic スキーマ
 │   ├── ndi_scanner.py      # NDIソース自動探索サービス
 │   ├── devices.py          # カメラ・オーディオデバイス検出
 │   ├── rx_runner.py        # RXプロセスコントローラー
 │   ├── tx_runner.py        # TXプロセスコントローラー
+│   ├── multiview_runner.py # マルチビュープロセスコントローラー
+│   ├── signage_runner.py   # サイネージプロセスコントローラー
+│   ├── webrtc_manager.py   # WebRTC低遅延プレビューマネージャー
 │   └── main.py             # REST APIエンドポイント
-├── main.py                 # 統合CLIエントリーポイント (rx / tx / web)
+├── data/
+│   └── signage/            # アップロードされたサイネージ画像保存先
+├── frontend/               # Nuxt 3 / Vue 3 管理Webダッシュボード
+├── main.py                 # 統合CLIエントリーポイント (rx / tx / multiview / signage / web)
 ├── requirements.txt
 └── systemd-example/        # systemd用ユニット設定例
 ```

@@ -153,3 +153,25 @@ class WebRTCAnswerResponse(BaseModel):
     type: str
 
 
+class SignageImageItem(BaseModel):
+    filename: str
+    url: str
+    size_bytes: int
+    modified_at: float
+
+
+class SignageStartRequest(BaseModel):
+    filename: Optional[str] = None
+    fullscreen: bool = True
+
+
+class SignageStatus(BaseModel):
+    running: bool = False
+    current_image: Optional[str] = None
+    filename: Optional[str] = None
+    fullscreen: bool = True
+    width: int = 0
+    height: int = 0
+    error: Optional[str] = None
+
+

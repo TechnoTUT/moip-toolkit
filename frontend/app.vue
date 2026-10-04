@@ -103,13 +103,47 @@ interface MultiviewStatus {
   error: string | null
 }
 
+interface SignageImage {
+  filename: string
+  url: string
+  size_bytes: number
+  modified_at: number
+}
+
+interface SignageStatus {
+  running: boolean
+  current_image: string | null
+  filename: string | null
+  fullscreen: boolean
+  width: number
+  height: number
+  error: string | null
+}
+
 // Active Tab
-const activeTab = ref<'rx' | 'tx' | 'multiview'>('rx')
+const activeTab = ref<'rx' | 'tx' | 'multiview' | 'signage'>('rx')
 
 // State
 const ndiSources = ref<NDISource[]>([])
 const videoDevices = ref<VideoDevice[]>([])
 const audioDevices = ref<AudioDevice[]>([])
+
+const signageStatus = ref<SignageStatus>({
+  running: false,
+  current_image: null,
+  filename: null,
+  fullscreen: true,
+  width: 0,
+  height: 0,
+  error: null
+})
+const signageImages = ref<SignageImage[]>([])
+const selectedSignageImage = ref<string | null>(null)
+const signageFullscreen = ref(true)
+const signageLoading = ref(false)
+const signageUploading = ref(false)
+const signageError = ref<string | null>(null)
+const fileInputRef = ref<HTMLInputElement | null>(null)
 
 const multiviewStatus = ref<MultiviewStatus>({
   running: false,
@@ -580,6 +614,9 @@ function setupSSE() {
       if (data.multiview) {
         multiviewStatus.value = data.multiview
       }
+      if (data.signage) {
+        signageStatus.value = data.signage
+      }
       if (data.system) {
         systemStatus.value = data.system
       }
@@ -598,9 +635,132 @@ function setupSSE() {
   }
 }
 
+async function fetchSignageImages() {
+  try {
+    const res = await fetch(`${API_BASE}/api/signage/images`)
+    if (res.ok) {
+      const data: SignageImage[] = await res.json()
+      signageImages.value = data
+      if (data.length > 0 && !selectedSignageImage.value) {
+        selectedSignageImage.value = data[0].filename
+      }
+    }
+  } catch (e) {
+    console.error('Failed to fetch signage images', e)
+  }
+}
+
+async function uploadSignageFile(file: File) {
+  if (!file) return
+  signageUploading.value = true
+  signageError.value = null
+  try {
+    const formData = new FormData()
+    formData.append('file', file)
+    const res = await fetch(`${API_BASE}/api/signage/upload`, {
+      method: 'POST',
+      body: formData
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.detail || 'Upload failed')
+    }
+    const uploaded: SignageImage = await res.json()
+    await fetchSignageImages()
+    selectedSignageImage.value = uploaded.filename
+  } catch (e: any) {
+    signageError.value = e.message || 'Failed to upload image'
+  } finally {
+    signageUploading.value = false
+    if (fileInputRef.value) fileInputRef.value.value = ''
+  }
+}
+
+function handleFileInputChange(e: Event) {
+  const target = e.target as HTMLInputElement
+  if (target.files && target.files.length > 0) {
+    uploadSignageFile(target.files[0])
+  }
+}
+
+function handleDrop(e: DragEvent) {
+  e.preventDefault()
+  if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
+    uploadSignageFile(e.dataTransfer.files[0])
+  }
+}
+
+async function startSignageDisplay(filename?: string) {
+  signageLoading.value = true
+  signageError.value = null
+  try {
+    const targetFile = filename || selectedSignageImage.value || undefined
+    const res = await fetch(`${API_BASE}/api/signage/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filename: targetFile,
+        fullscreen: signageFullscreen.value
+      })
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.detail || 'Failed to start signage')
+    }
+    signageStatus.value = await res.json()
+  } catch (e: any) {
+    signageError.value = e.message || 'Failed to start signage display'
+  } finally {
+    signageLoading.value = false
+  }
+}
+
+async function stopSignageDisplay() {
+  signageLoading.value = true
+  signageError.value = null
+  try {
+    const res = await fetch(`${API_BASE}/api/signage/stop`, {
+      method: 'POST'
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.detail || 'Failed to stop signage')
+    }
+    signageStatus.value = await res.json()
+  } catch (e: any) {
+    signageError.value = e.message || 'Failed to stop signage display'
+  } finally {
+    signageLoading.value = false
+  }
+}
+
+async function deleteSignageImage(filename: string) {
+  if (!confirm(`Are you sure you want to delete ${filename}?`)) return
+  try {
+    const res = await fetch(`${API_BASE}/api/signage/image/${encodeURIComponent(filename)}`, {
+      method: 'DELETE'
+    })
+    if (res.ok) {
+      if (selectedSignageImage.value === filename) {
+        selectedSignageImage.value = null
+      }
+      await fetchSignageImages()
+    }
+  } catch (e) {
+    console.error('Failed to delete signage image', e)
+  }
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
 onMounted(() => {
   fetchSettings()
   fetchDevices()
+  fetchSignageImages()
   setupSSE()
 })
 
@@ -672,6 +832,19 @@ onUnmounted(() => {
             <span
               class="h-2 w-2 rounded-full"
               :class="multiviewStatus.running ? 'bg-purple-400 animate-pulse' : 'bg-slate-300 dark:bg-slate-600'"
+            />
+          </button>
+          <button
+            @click="activeTab = 'signage'"
+            :class="[
+              'px-5 py-2 rounded-lg text-sm font-semibold transition flex items-center gap-2',
+              activeTab === 'signage' ? 'bg-[#C7000A] text-white shadow-md shadow-[#C7000A]/20' : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100'
+            ]"
+          >
+            <span>Digital Signage</span>
+            <span
+              class="h-2 w-2 rounded-full"
+              :class="signageStatus.running ? 'bg-blue-400 animate-pulse' : 'bg-slate-300 dark:bg-slate-600'"
             />
           </button>
         </div>
@@ -1356,6 +1529,254 @@ onUnmounted(() => {
           </p>
         </div>
 
+      </div>
+
+      <!-- ================= DIGITAL SIGNAGE TAB ================= -->
+      <div v-else-if="activeTab === 'signage'" class="space-y-6">
+        <!-- Signage Header / Control Panel -->
+        <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-sm">
+          <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div>
+              <div class="flex items-center gap-2.5">
+                <h2 class="text-lg font-bold tracking-tight text-slate-900 dark:text-slate-100">Local Digital Signage</h2>
+                <span
+                  class="px-2.5 py-0.5 rounded-full text-xs font-semibold"
+                  :class="signageStatus.running ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20' : 'bg-slate-100 dark:bg-slate-800 text-slate-500'"
+                >
+                  {{ signageStatus.running ? 'DISPLAYING ON SCREEN' : 'STANDBY / IDLE' }}
+                </span>
+              </div>
+              <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                Upload images and render them directly onto the connected display without NDI network overhead.
+              </p>
+            </div>
+
+            <!-- Global Action Controls -->
+            <div class="flex items-center gap-3 w-full sm:w-auto">
+              <!-- Fullscreen Checkbox -->
+              <label class="flex items-center gap-2 text-xs font-medium text-slate-600 dark:text-slate-300 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  v-model="signageFullscreen"
+                  class="rounded border-slate-300 dark:border-slate-700 text-[#C7000A] focus:ring-[#C7000A]"
+                />
+                <span>Fullscreen</span>
+              </label>
+
+              <!-- Start / Stop Button -->
+              <button
+                v-if="!signageStatus.running"
+                @click="startSignageDisplay()"
+                :disabled="signageLoading || signageImages.length === 0"
+                class="flex-1 sm:flex-initial flex items-center justify-center gap-2 px-5 py-2.5 bg-[#C7000A] hover:bg-[#b00009] disabled:opacity-50 text-white rounded-xl text-sm font-bold shadow-md shadow-[#C7000A]/20 transition"
+              >
+                <svg v-if="signageLoading" class="animate-spin h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
+                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+                </svg>
+                <svg v-else class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                  <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd" />
+                </svg>
+                <span>Start Display</span>
+              </button>
+
+              <button
+                v-else
+                @click="stopSignageDisplay()"
+                :disabled="signageLoading"
+                class="flex-1 sm:flex-initial flex items-center justify-center gap-2 px-5 py-2.5 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white rounded-xl text-sm font-bold shadow-md shadow-rose-600/20 transition"
+              >
+                <svg v-if="signageLoading" class="animate-spin h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
+                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+                </svg>
+                <svg v-else class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                  <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8 7a1 1 0 00-1 1v4a1 1 0 001 1h4a1 1 0 001-1V8a1 1 0 00-1-1H8z" clip-rule="evenodd" />
+                </svg>
+                <span>Stop Display</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Error Alert Banner -->
+          <div v-if="signageError" class="mt-4 p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 flex items-center justify-between text-xs text-rose-600 dark:text-rose-400">
+            <div class="flex items-center gap-2">
+              <svg class="w-4 h-4 shrink-0" fill="currentColor" viewBox="0 0 20 20">
+                <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clip-rule="evenodd" />
+              </svg>
+              <span>{{ signageError }}</span>
+            </div>
+            <button @click="signageError = null" class="p-1 hover:bg-rose-100 dark:hover:bg-rose-900 rounded">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <!-- Main Signage Grid: Left (Preview & Upload) + Right (Image Library) -->
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+          
+          <!-- Left Column: Upload Dropzone & Currently Selected Preview (lg:col-span-7) -->
+          <div class="lg:col-span-7 space-y-6">
+            
+            <!-- Upload Dropzone Card -->
+            <div
+              @dragover.prevent
+              @drop="handleDrop"
+              @click="fileInputRef?.click()"
+              class="border-2 border-dashed border-slate-300 dark:border-slate-700 hover:border-[#C7000A] dark:hover:border-[#C7000A] bg-white dark:bg-slate-900 rounded-2xl p-8 text-center cursor-pointer transition flex flex-col items-center justify-center space-y-3 group shadow-sm"
+            >
+              <input
+                ref="fileInputRef"
+                type="file"
+                accept="image/png, image/jpeg, image/webp, image/bmp"
+                class="hidden"
+                @change="handleFileInputChange"
+              />
+              <div class="w-12 h-12 rounded-2xl bg-red-50 dark:bg-red-950/40 text-[#C7000A] flex items-center justify-center group-hover:scale-110 transition duration-200">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                </svg>
+              </div>
+              <div>
+                <p class="text-sm font-bold text-slate-800 dark:text-slate-200">
+                  <span v-if="signageUploading">Uploading image...</span>
+                  <span v-else>Click to upload or drag and drop an image</span>
+                </p>
+                <p class="text-xs text-slate-400 mt-1">PNG, JPG, JPEG, WEBP or BMP (Auto-scaled with letterboxing)</p>
+              </div>
+            </div>
+
+            <!-- Active / Selected Image Preview Card -->
+            <div v-if="selectedSignageImage" class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden shadow-sm">
+              <div class="px-5 py-3 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between bg-slate-50/50 dark:bg-slate-900/50">
+                <div class="flex items-center gap-2">
+                  <span class="text-xs font-bold text-slate-700 dark:text-slate-300">Selected Image Preview</span>
+                  <span
+                    v-if="signageStatus.running && signageStatus.filename === selectedSignageImage"
+                    class="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 text-[10px] font-bold uppercase tracking-wider"
+                  >
+                    Active on Screen
+                  </span>
+                </div>
+                <button
+                  v-if="!signageStatus.running || signageStatus.filename !== selectedSignageImage"
+                  @click="startSignageDisplay(selectedSignageImage)"
+                  :disabled="signageLoading"
+                  class="px-3 py-1 bg-[#C7000A] hover:bg-[#b00009] text-white text-xs font-bold rounded-lg transition shadow-sm"
+                >
+                  Display This Image
+                </button>
+              </div>
+
+              <!-- Preview Canvas Area -->
+              <div class="p-4 bg-slate-950 flex items-center justify-center aspect-video overflow-hidden">
+                <img
+                  :src="`${API_BASE}/api/signage/image/${encodeURIComponent(selectedSignageImage)}`"
+                  alt="Signage Preview"
+                  class="max-w-full max-h-full object-contain shadow-lg"
+                />
+              </div>
+
+              <!-- Meta Footer -->
+              <div class="px-5 py-3 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+                <span class="font-mono truncate max-w-[280px]">{{ selectedSignageImage }}</span>
+                <span v-if="signageStatus.running && signageStatus.filename === selectedSignageImage && signageStatus.width > 0">
+                  {{ signageStatus.width }} &times; {{ signageStatus.height }}
+                </span>
+              </div>
+            </div>
+
+          </div>
+
+          <!-- Right Column: Image Library / Gallery (lg:col-span-5) -->
+          <div class="lg:col-span-5 space-y-4">
+            <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm space-y-4">
+              <div class="flex items-center justify-between">
+                <h3 class="text-sm font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                  <span>Image Library</span>
+                  <span class="px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-xs font-semibold text-slate-500">
+                    {{ signageImages.length }}
+                  </span>
+                </h3>
+                <button
+                  @click="fetchSignageImages"
+                  class="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
+                  title="Refresh library"
+                >
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                </button>
+              </div>
+
+              <!-- Image List Grid -->
+              <div v-if="signageImages.length > 0" class="space-y-2 max-h-[600px] overflow-y-auto pr-1">
+                <div
+                  v-for="img in signageImages"
+                  :key="img.filename"
+                  @click="selectedSignageImage = img.filename"
+                  class="p-2.5 rounded-xl border transition flex items-center justify-between gap-3 cursor-pointer group"
+                  :class="[
+                    selectedSignageImage === img.filename
+                      ? 'border-[#C7000A] bg-red-50/40 dark:bg-red-950/20'
+                      : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 bg-white dark:bg-slate-900'
+                  ]"
+                >
+                  <!-- Thumbnail & Title -->
+                  <div class="flex items-center gap-3 min-w-0">
+                    <div class="w-14 h-10 rounded-lg bg-black overflow-hidden flex-shrink-0 border border-slate-200 dark:border-slate-800">
+                      <img
+                        :src="`${API_BASE}${img.url}`"
+                        :alt="img.filename"
+                        class="w-full h-full object-cover"
+                        loading="lazy"
+                      />
+                    </div>
+                    <div class="min-w-0">
+                      <p class="text-xs font-semibold text-slate-800 dark:text-slate-200 truncate group-hover:text-[#C7000A] transition">
+                        {{ img.filename }}
+                      </p>
+                      <p class="text-[10px] text-slate-400 mt-0.5">
+                        {{ formatBytes(img.size_bytes) }} &bull; {{ new Date(img.modified_at * 1000).toLocaleTimeString() }}
+                      </p>
+                    </div>
+                  </div>
+
+                  <!-- Actions / Badges -->
+                  <div class="flex items-center gap-2 shrink-0">
+                    <span
+                      v-if="signageStatus.running && signageStatus.filename === img.filename"
+                      class="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 text-[10px] font-bold"
+                    >
+                      Active
+                    </span>
+                    <button
+                      @click.stop="deleteSignageImage(img.filename)"
+                      class="p-1.5 rounded-lg text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/30 transition opacity-0 group-hover:opacity-100"
+                      title="Delete image"
+                    >
+                      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Empty State -->
+              <div v-else class="text-center py-8 text-slate-400 space-y-2">
+                <svg class="w-8 h-8 mx-auto text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                </svg>
+                <p class="text-xs">No images in library. Upload one above to get started.</p>
+              </div>
+
+            </div>
+          </div>
+
+        </div>
       </div>
 
     </main>

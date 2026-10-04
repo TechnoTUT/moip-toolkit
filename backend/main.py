@@ -9,8 +9,8 @@ from contextlib import asynccontextmanager
 from typing import List
 import json
 import asyncio
-from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, HTTPException, Request, Response, UploadFile, File
+from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -29,12 +29,16 @@ from backend.models import (
     MultiviewStatus,
     WebRTCOfferRequest,
     WebRTCAnswerResponse,
+    SignageImageItem,
+    SignageStartRequest,
+    SignageStatus,
 )
 from backend.ndi_scanner import scanner
 from backend.devices import list_video_devices, list_audio_devices
 from backend.rx_runner import rx_runner
 from backend.tx_runner import tx_runner
 from backend.multiview_runner import multiview_runner
+from backend.signage_runner import signage_runner
 from backend.preview_manager import preview_manager
 from backend.webrtc_manager import webrtc_manager
 from backend.system_monitor import system_monitor
@@ -98,6 +102,7 @@ async def lifespan(app: FastAPI):
     rx_runner.stop()
     tx_runner.stop()
     multiview_runner.stop()
+    signage_runner.stop()
 
 
 app = FastAPI(
@@ -164,6 +169,7 @@ async def events_stream(request: Request):
                 "tx": tx_stat,
                 "system": sys_stat,
                 "multiview": multiview_runner.get_status().model_dump(),
+                "signage": signage_runner.get_status().model_dump(),
                 "settings": settings_manager.get_settings().model_dump(),
             }
             payload_str = json.dumps(current_payload, sort_keys=True)
@@ -373,6 +379,126 @@ def stop_multiview():
     """Stop SDL2 multi-viewer window."""
     multiview_runner.stop()
     return multiview_runner.get_status()
+
+
+# --- Digital Signage Endpoints ---
+SIGNAGE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data", "signage"))
+os.makedirs(SIGNAGE_DIR, exist_ok=True)
+ALLOWED_SIGNAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+
+
+@app.get("/api/signage/status", response_model=SignageStatus, tags=["Signage"])
+def get_signage_status():
+    """Get status of local digital signage display."""
+    return signage_runner.get_status()
+
+
+@app.get("/api/signage/images", response_model=List[SignageImageItem], tags=["Signage"])
+def list_signage_images():
+    """List all uploaded signage images ordered by modification time (newest first)."""
+    items = []
+    if os.path.exists(SIGNAGE_DIR):
+        for entry in os.scandir(SIGNAGE_DIR):
+            if entry.is_file():
+                ext = os.path.splitext(entry.name)[1].lower()
+                if ext in ALLOWED_SIGNAGE_EXTS:
+                    stat = entry.stat()
+                    items.append(SignageImageItem(
+                        filename=entry.name,
+                        url=f"/api/signage/image/{entry.name}",
+                        size_bytes=stat.st_size,
+                        modified_at=stat.st_mtime
+                    ))
+    items.sort(key=lambda x: x.modified_at, reverse=True)
+    return items
+
+
+@app.get("/api/signage/image/{filename}", tags=["Signage"])
+def get_signage_image(filename: str):
+    """Serve an uploaded signage image."""
+    safe_filename = os.path.basename(filename)
+    file_path = os.path.join(SIGNAGE_DIR, safe_filename)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Image not found")
+    return FileResponse(file_path)
+
+
+@app.post("/api/signage/upload", response_model=SignageImageItem, tags=["Signage"])
+async def upload_signage_image(file: UploadFile = File(...)):
+    """Upload a new signage image."""
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in ALLOWED_SIGNAGE_EXTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file format. Allowed: {', '.join(sorted(ALLOWED_SIGNAGE_EXTS))}"
+        )
+
+    # Sanitize filename
+    safe_name = os.path.basename(file.filename or "image.png")
+    dest_path = os.path.join(SIGNAGE_DIR, safe_name)
+
+    content = await file.read()
+    with open(dest_path, "wb") as f:
+        f.write(content)
+
+    stat = os.stat(dest_path)
+    item = SignageImageItem(
+        filename=safe_name,
+        url=f"/api/signage/image/{safe_name}",
+        size_bytes=stat.st_size,
+        modified_at=stat.st_mtime
+    )
+
+    # If signage is already running, switch image dynamically to the newly uploaded image
+    if signage_runner.get_status().running:
+        signage_runner.switch_image(dest_path)
+
+    return item
+
+
+@app.delete("/api/signage/image/{filename}", tags=["Signage"])
+def delete_signage_image(filename: str):
+    """Delete an uploaded signage image."""
+    safe_filename = os.path.basename(filename)
+    file_path = os.path.join(SIGNAGE_DIR, safe_filename)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    status = signage_runner.get_status()
+    if status.running and status.filename == safe_filename:
+        signage_runner.stop()
+
+    os.remove(file_path)
+    return {"status": "deleted", "filename": safe_filename}
+
+
+@app.post("/api/signage/start", response_model=SignageStatus, tags=["Signage"])
+def start_signage(req: SignageStartRequest):
+    """Start local digital signage display."""
+    target_path = None
+    if req.filename:
+        target_path = os.path.join(SIGNAGE_DIR, os.path.basename(req.filename))
+        if not os.path.exists(target_path):
+            raise HTTPException(status_code=404, detail=f"Image {req.filename} not found")
+    else:
+        # Pick newest image
+        images = list_signage_images()
+        if not images:
+            raise HTTPException(status_code=400, detail="No signage images uploaded yet")
+        target_path = os.path.join(SIGNAGE_DIR, images[0].filename)
+
+    try:
+        signage_runner.start(target_path, fullscreen=req.fullscreen)
+        return signage_runner.get_status()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/signage/stop", response_model=SignageStatus, tags=["Signage"])
+def stop_signage():
+    """Stop local digital signage display."""
+    signage_runner.stop()
+    return signage_runner.get_status()
 
 
 # --- Persistent Settings Endpoints ---
