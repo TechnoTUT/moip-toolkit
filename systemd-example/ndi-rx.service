@@ -3,7 +3,7 @@ Description=NDI Receiver (SDL2)
 After=network.target
 
 [Service]
-ExecStart=%h/utone-ndi-utils/venv/bin/python %h/utone-ndi-utils/rx_sdl2.py -s "__SOURCE_NAME__" --fullscreen
+ExecStart=%h/utone-ndi-utils/.venv/bin/python %h/utone-ndi-utils/main.py rx -s "__SOURCE_NAME__" --fullscreen
 WorkingDirectory=%h/utone-ndi-utils
 Restart=always
 RestartSec=3
