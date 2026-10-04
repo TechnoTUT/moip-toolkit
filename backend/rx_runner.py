@@ -88,6 +88,7 @@ def _rx_worker_process(command_q: mp.Queue, status_q: mp.Queue, init_options: di
 
         last_frame_data = None
         last_frame_w, last_frame_h = 0, 0
+        last_timecode = -1.0
         is_texture_initialized = False
         last_status_report = 0.0
         last_audio_calc_time = 0.0
@@ -211,6 +212,7 @@ def _rx_worker_process(command_q: mp.Queue, status_q: mp.Queue, init_options: di
                         reconnect_cooldown_until = now + 1.0
 
                 # Yield CPU when waiting for source (cap waiting loop at ~60fps)
+                sdl2.SDL_GL_SwapWindow(window)
                 time.sleep(0.016)
             else:
                 if receiver.is_connected():
@@ -228,19 +230,23 @@ def _rx_worker_process(command_q: mp.Queue, status_q: mp.Queue, init_options: di
                     try:
                         receiver.frame_sync.capture_video()
                         tex_w, tex_h = vf.get_resolution()
+                        curr_timecode = vf.get_timecode_posix()
                         if tex_w > 0 and tex_h > 0 and vf.get_data_size() > 0:
-                            last_frame_data = bytes(vf)
-                            if last_frame_w != tex_w or last_frame_h != tex_h:
-                                is_texture_initialized = False
-                            last_frame_w, last_frame_h = tex_w, tex_h
-                            frames_rendered += 1
+                            if curr_timecode != last_timecode or last_frame_data is None:
+                                last_timecode = curr_timecode
+                                last_frame_data = bytes(vf)
+                                if last_frame_w != tex_w or last_frame_h != tex_h:
+                                    is_texture_initialized = False
+                                last_frame_w, last_frame_h = tex_w, tex_h
+                                frames_rendered += 1
 
-                        is_texture_initialized = render_texture(
-                            last_frame_data, last_frame_w, last_frame_h, win_w, win_h,
-                            texture_id, options.recv_fmt, is_texture_initialized
-                        )
-                        if show_banner:
-                            render_ip_banner(overlay_tex_id, local_ip, current_source_name, win_w, win_h)
+                                is_texture_initialized = render_texture(
+                                    last_frame_data, last_frame_w, last_frame_h, win_w, win_h,
+                                    texture_id, options.recv_fmt, is_texture_initialized
+                                )
+                                if show_banner:
+                                    render_ip_banner(overlay_tex_id, local_ip, current_source_name, win_w, win_h)
+                                sdl2.SDL_GL_SwapWindow(window)
                     except Exception as e:
                         import traceback
                         print(f"[RX RUNNER] Error rendering frame: {e}", flush=True)
@@ -274,8 +280,6 @@ def _rx_worker_process(command_q: mp.Queue, status_q: mp.Queue, init_options: di
                                     last_audio_peaks = ch_peaks[:2]
                         except Exception:
                             pass
-
-            sdl2.SDL_GL_SwapWindow(window)
 
             # Report status every 0.5 sec
             now = time.time()

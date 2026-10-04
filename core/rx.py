@@ -308,7 +308,9 @@ def init_window(title: str, width: int, height: int, fullscreen: bool):
         raise RuntimeError(f"SDL_CreateWindow Error: {sdl2.SDL_GetError()}")
 
     sdl2.SDL_GL_CreateContext(window)
-    sdl2.SDL_GL_SetSwapInterval(1)  # Enable vsync
+    # Set swap interval to 0 (immediate) or -1 (late swap tearing) to minimize frame display latency
+    if sdl2.SDL_GL_SetSwapInterval(0) != 0:
+        sdl2.SDL_GL_SetSwapInterval(1)
     sdl2.SDL_ShowCursor(sdl2.SDL_DISABLE)
     return window
 

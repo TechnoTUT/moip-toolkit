@@ -51,6 +51,7 @@ class SlotState:
         self.frame_data: Optional[bytes] = None
         self.frame_w = 0
         self.frame_h = 0
+        self.last_timecode = -1.0
         self.is_tex_init = False
         self.audio_levels = [-60.0, -60.0]
         self.audio_peaks = [-60.0, -60.0]
@@ -343,11 +344,14 @@ def play_multiview(
                         try:
                             slot.receiver.frame_sync.capture_video()
                             tw, th = slot.vf.get_resolution()
+                            tc = slot.vf.get_timecode_posix()
                             if tw > 0 and th > 0 and slot.vf.get_data_size() > 0:
-                                slot.frame_data = bytes(slot.vf)
-                                if slot.frame_w != tw or slot.frame_h != th:
-                                    slot.is_tex_init = False
-                                slot.frame_w, slot.frame_h = tw, th
+                                if tc != slot.last_timecode or slot.frame_data is None:
+                                    slot.last_timecode = tc
+                                    slot.frame_data = bytes(slot.vf)
+                                    if slot.frame_w != tw or slot.frame_h != th:
+                                        slot.is_tex_init = False
+                                    slot.frame_w, slot.frame_h = tw, th
                         except Exception:
                             pass
 
