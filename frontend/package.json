@@ -1,0 +1,21 @@
+{
+  "name": "utone-ndi-frontend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "nuxt build --preset static",
+    "dev": "nuxt dev --host",
+    "generate": "nuxt generate",
+    "preview": "nuxt preview",
+    "postinstall": "nuxt prepare"
+  },
+  "dependencies": {
+    "@nuxt/ui": "^2.22.3",
+    "nuxt": "^3.15.4",
+    "vue": "^3.5.13",
+    "vue-router": "^4.5.0"
+  },
+  "devDependencies": {
+    "lucide-vue-next": "^0.475.0"
+  }
+}

@@ -1,3 +1,7 @@
+"""
+core.tx
+NDI Sender threads, video/audio capture, frame assembly loop.
+"""
 from __future__ import annotations
 
 import enum
@@ -6,30 +10,21 @@ import sys
 import threading
 import time
 from fractions import Fraction
-from typing import NamedTuple
-
-import click
-import cv2
-import numpy as np
+from typing import NamedTuple, Optional
 from typing_extensions import Self
 
+import cv2
+import numpy as np
 try:
     import sounddevice as sd
-except ImportError:
-    print("Error: sounddevice is not installed. Please run 'pip install sounddevice numpy'")
-    sys.exit(1)
-
-try:
-    from cyndilib.sender import Sender
-    from cyndilib.video_frame import VideoSendFrame
-    from cyndilib.audio_frame import AudioSendFrame
-    from cyndilib.wrapper.ndi_structs import FourCC
-except ImportError:
-    print("Error: cyndilib is not installed. Please run 'pip install cyndilib'")
-    sys.exit(1)
+except Exception:
+    sd = None
+from cyndilib.sender import Sender
+from cyndilib.video_frame import VideoSendFrame
+from cyndilib.audio_frame import AudioSendFrame
+from cyndilib.wrapper.ndi_structs import FourCC
 
 
-# 定数化
 MAX_CAMERA_RETRIES = 100
 QUEUE_TIMEOUT = 1.0
 AUDIO_CHUNKS_PER_FRAME = 4
@@ -60,34 +55,113 @@ class Options(NamedTuple):
     video_device: int
     sender_name: str
     no_audio: bool
-    audio_device: int | None
+    audio_device: Optional[int]
     sample_rate: int
     audio_channels: int
+
+
+def generate_color_bars(width: int, height: int, pix_fmt: PixFmt, text: str = "TEST PATTERN") -> np.ndarray:
+    """Generate SMPTE-style HD color bars pattern with timestamp / label."""
+    # 7 standard colors in BGR: White, Yellow, Cyan, Green, Magenta, Red, Blue
+    colors = [
+        (255, 255, 255),  # White
+        (0, 255, 255),    # Yellow
+        (255, 255, 0),    # Cyan
+        (0, 255, 0),      # Green
+        (255, 0, 255),    # Magenta
+        (0, 0, 255),      # Red
+        (255, 0, 0),      # Blue
+    ]
+    img = np.zeros((height, width, 3), dtype=np.uint8)
+    bar_w = width // len(colors)
+    
+    # Top 75% standard bars
+    h_top = int(height * 0.75)
+    for i, col in enumerate(colors):
+        x_start = i * bar_w
+        x_end = width if i == len(colors) - 1 else (i + 1) * bar_w
+        img[0:h_top, x_start:x_end] = col
+
+    # Bottom 25% cast bars (Blue, Black, Magenta, Black, Cyan, Black, Gray)
+    cast_colors = [
+        (255, 0, 0), (0, 0, 0), (255, 0, 255), (0, 0, 0), (255, 255, 0), (0, 0, 0), (128, 128, 128)
+    ]
+    for i, col in enumerate(cast_colors):
+        x_start = i * bar_w
+        x_end = width if i == len(cast_colors) - 1 else (i + 1) * bar_w
+        img[h_top:height, x_start:x_end] = col
+
+    # Draw label box in center
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = max(0.8, width / 1280.0 * 1.2)
+    thickness = max(2, int(font_scale * 2))
+    text_size, _ = cv2.getTextSize(text, font, font_scale, thickness)
+    tx = (width - text_size[0]) // 2
+    ty = int(height * 0.45)
+
+    cv2.rectangle(img, (tx - 20, ty - text_size[1] - 15), (tx + text_size[0] + 20, ty + 15), (0, 0, 0), -1)
+    cv2.putText(img, text, (tx, ty), font, font_scale, (255, 255, 255), thickness, cv2.LINE_AA)
+
+    return cv2.cvtColor(img, pix_fmt.cv_color_code)
 
 
 class VideoSourceThread(threading.Thread):
     def __init__(self, device_index: int, width: int, height: int, fps: float, out_queue: queue.Queue, pix_fmt: PixFmt):
         super().__init__()
+        self.device_index = device_index
         self.out_queue = out_queue
         self.pix_fmt = pix_fmt
+        self.fps = fps if fps > 0 else 30.0
         self.running = True
         self.daemon = True
+        self.cap = None
 
-        self.cap = cv2.VideoCapture(device_index, cv2.CAP_V4L2)
-        if not self.cap.isOpened():
-            raise IOError(f"Could not open video device: {device_index}")
+        if device_index == -1:
+            # Color Bars Test Pattern generator
+            self.actual_xres = width
+            self.actual_yres = height
+            self.actual_fps = self.fps
+        else:
+            self.cap = cv2.VideoCapture(device_index, cv2.CAP_V4L2)
+            if not self.cap.isOpened():
+                raise IOError(f"Could not open video device: {device_index}")
 
-        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-        self.cap.set(cv2.CAP_PROP_FPS, fps)
-        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)
-        
-        self.actual_xres = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        self.actual_yres = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        self.actual_fps = self.cap.get(cv2.CAP_PROP_FPS)
+            self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+            self.cap.set(cv2.CAP_PROP_FPS, fps)
+            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)
+            
+            self.actual_xres = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            self.actual_yres = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            self.actual_fps = self.cap.get(cv2.CAP_PROP_FPS)
 
     def run(self):
+        if self.device_index == -1:
+            # Synthetic pattern loop
+            frame_interval = 1.0 / self.actual_fps
+            start_t = time.time()
+            frame_count = 0
+            while self.running:
+                now_str = time.strftime("%H:%M:%S")
+                label = f"NDI TEST PATTERN - {now_str}"
+                processed_frame = generate_color_bars(self.actual_xres, self.actual_yres, self.pix_fmt, label)
+                
+                try:
+                    self.out_queue.put(processed_frame, timeout=QUEUE_TIMEOUT)
+                except queue.Full:
+                    try:
+                        self.out_queue.get_nowait()
+                    except queue.Empty:
+                        pass
+
+                frame_count += 1
+                target_time = start_t + frame_count * frame_interval
+                sleep_dur = target_time - time.time()
+                if sleep_dur > 0:
+                    time.sleep(sleep_dur)
+            return
+
         retry_count = 0
         while self.running:
             ret, frame = self.cap.read()
@@ -100,7 +174,7 @@ class VideoSourceThread(threading.Thread):
                 time.sleep(0.01)
                 continue
             
-            retry_count = 0 # 成功時はリセット
+            retry_count = 0
             processed_frame = cv2.cvtColor(frame, self.pix_fmt.cv_color_code)
             
             while self.running:
@@ -108,7 +182,6 @@ class VideoSourceThread(threading.Thread):
                     self.out_queue.put(processed_frame, timeout=QUEUE_TIMEOUT)
                     break
                 except queue.Full:
-                    # キューが詰まっている場合、古いフレームを捨てて最新のものに置き換える
                     try:
                         self.out_queue.get_nowait()
                     except queue.Empty:
@@ -117,7 +190,8 @@ class VideoSourceThread(threading.Thread):
     def stop(self):
         self.running = False
         self.join(timeout=2)
-        self.cap.release()
+        if self.cap:
+            self.cap.release()
 
 
 class VideoSendThread(threading.Thread):
@@ -139,6 +213,7 @@ class VideoSendThread(threading.Thread):
     def stop(self):
         self.running = False
         self.join(timeout=2)
+
 
 class AudioSendThread(threading.Thread):
     def __init__(self, sender: Sender, in_queue: queue.Queue):
@@ -163,13 +238,18 @@ class AudioSendThread(threading.Thread):
 
 def parse_frame_rate(fr_str: str) -> Fraction:
     common_rates = {"23.98": Fraction(24000, 1001), "29.97": Fraction(30000, 1001), "59.94": Fraction(60000, 1001)}
-    if fr_str in common_rates: return common_rates[fr_str]
-    if "/" in fr_str: n, d = [int(s) for s in fr_str.split("/")]; return Fraction(n, d)
-    if "." in fr_str: return Fraction(fr_str).limit_denominator(2000)
+    if fr_str in common_rates:
+        return common_rates[fr_str]
+    if "/" in fr_str:
+        n, d = [int(s) for s in fr_str.split("/")]
+        return Fraction(n, d)
+    if "." in fr_str:
+        return Fraction(fr_str).limit_denominator(2000)
     return Fraction(int(fr_str), 1)
 
 
-def capture_and_send(opts: Options) -> None:
+def capture_and_send(opts: Options, log_fn=print) -> None:
+    """Capture camera & audio and stream over NDI."""
     processed_video_queue = queue.Queue(maxsize=1)
     send_video_queue = queue.Queue(maxsize=1)
     send_audio_queue = queue.Queue(maxsize=2)
@@ -179,13 +259,13 @@ def capture_and_send(opts: Options) -> None:
             opts.video_device, opts.xres, opts.yres, opts.fps, processed_video_queue, opts.pix_fmt
         )
     except IOError as e:
-        print(f"Fatal: Could not initialize video source thread. Error: {e}", file=sys.stderr)
+        log_fn(f"Fatal: Could not initialize video source thread. Error: {e}")
         return
 
     actual_xres = video_source_thread.actual_xres
     actual_yres = video_source_thread.actual_yres
     actual_fps = video_source_thread.actual_fps
-    print(f"Camera opened with settings: {actual_xres}x{actual_yres} @ {actual_fps:.2f} FPS")
+    log_fn(f"Camera opened with settings: {actual_xres}x{actual_yres} @ {actual_fps:.2f} FPS")
 
     sender = Sender(opts.sender_name)
     vf = VideoSendFrame()
@@ -215,14 +295,13 @@ def capture_and_send(opts: Options) -> None:
         
         def audio_callback(indata, frames, time_info, status):
             if status and 'input overflow' not in str(status):
-                print(f"Audio callback status: {status}", file=sys.stderr)
+                log_fn(f"Audio callback status: {status}")
             if audio_queue:
                 while True:
                     try:
                         audio_queue.put(indata.copy().T, timeout=0.1)
                         break
                     except queue.Full:
-                        # 詰まっている場合は古い音声を捨てて同期ズレを防ぐ
                         try:
                             audio_queue.get_nowait()
                         except queue.Empty:
@@ -247,28 +326,22 @@ def capture_and_send(opts: Options) -> None:
 
     try:
         with sender:
-            print("Starting assembler loop...")
+            log_fn("Starting assembler loop...")
             if not opts.no_audio and audio_queue is not None:
                 while True:
                     try:
                         video_data = processed_video_queue.get(timeout=2.0)
                         audio_chunks = [audio_queue.get(timeout=2.0) for _ in range(AUDIO_CHUNKS_PER_FRAME)]
                         audio_data = np.concatenate(audio_chunks, axis=1)
-                        
-                        # 送信キューに空きがない場合は破棄してスキップ
                         try:
                             send_video_queue.put_nowait(video_data)
                             send_audio_queue.put_nowait(audio_data)
                         except queue.Full:
-                            print("Warning: Network send queue full. Dropping frame.", file=sys.stderr)
-                            # 送信キューを一旦空にする
                             with send_video_queue.mutex: send_video_queue.queue.clear()
                             with send_audio_queue.mutex: send_audio_queue.queue.clear()
-
                     except queue.Empty:
                         if not video_source_thread.running:
-                            break # カメラエラーでスレッドが死んだ場合
-                        print("Warning: Audio or video queue was empty.", file=sys.stderr)
+                            break
             else:
                 while True:
                     try:
@@ -282,7 +355,7 @@ def capture_and_send(opts: Options) -> None:
                             break
 
     finally:
-        print("\nStopping stream resources...")
+        log_fn("Stopping stream resources...")
         video_send_thread.stop()
         if audio_send_thread:
             audio_send_thread.stop()
@@ -290,49 +363,4 @@ def capture_and_send(opts: Options) -> None:
             audio_stream.stop()
             audio_stream.close()
         video_source_thread.stop()
-        print("Stream stopped.")
-
-# ... (main関数部分は変更なし) ...
-@click.command()
-@click.option('--list-devices', is_flag=True, help='List available video and audio devices and exit.')
-@click.option('--no-audio', is_flag=True, help='Disable audio and send video only.')
-@click.option('--pix-fmt', type=click.Choice([m.name for m in PixFmt], case_sensitive=False), default=PixFmt.BGRX.name, show_default=True, help='Pixel format.')
-@click.option('-x', '--x-res', type=int, default=1920, show_default=True, help='Horizontal resolution.')
-@click.option('-y', '--y-res', type=int, default=1080, show_default=True, help='Vertical resolution.')
-@click.option('--fps', type=str, default='30', show_default=True, help='Frame rate (e.g., 30, 29.97, 60000/1001).')
-@click.option('-d', '--video-device', type=int, default=0, show_default=True, help='Video device index.')
-@click.option('--audio-device', type=int, default=None, show_default=False, help='Audio device ID (ignored if --no-audio).')
-@click.option('--sample-rate', type=int, default=48000, show_default=True, help='Audio sample rate (ignored if --no-audio).')
-@click.option('--audio-channels', type=int, default=2, show_default=True, help='Number of audio channels (ignored if --no-audio).')
-@click.option('-n', '--sender-name', type=str, default='TX', show_default=True, help='NDI name for the sender.')
-def main(list_devices: bool, no_audio: bool, pix_fmt: str, x_res: int, y_res: int, fps: str, video_device: int, audio_device: int, sample_rate: int, audio_channels: int, sender_name: str):
-    if list_devices:
-        print("--- Available Video Devices (OpenCV) ---")
-        for i in range(10):
-            cap = cv2.VideoCapture(i, cv2.CAP_V4L2)
-            if cap.isOpened():
-                print(f"  Device {i}: Available")
-                cap.release()
-            else:
-                break
-        print("\n--- Available Audio Devices (sounddevice) ---")
-        print(sd.query_devices())
-        return
-
-    try:
-        frame_rate = float(parse_frame_rate(fps))
-        opts = Options(
-            pix_fmt=PixFmt.from_str(pix_fmt), xres=x_res, yres=y_res,
-            fps=frame_rate, video_device=video_device, sender_name=sender_name,
-            no_audio=no_audio, audio_device=audio_device,
-            sample_rate=sample_rate, audio_channels=audio_channels
-        )
-        capture_and_send(opts)
-    except (IOError, ValueError, RuntimeError) as e:
-        print(f"An error occurred: {type(e).__name__}: {e}", file=sys.stderr)
-    except KeyboardInterrupt:
-        print("\nStream stopped by user.")
-
-
-if __name__ == '__main__':
-    main()
+        log_fn("Stream stopped.")
