@@ -79,7 +79,7 @@ $ uv run main.py tx --list-devices
 ```
 
 ### 4. デジタルサイネージ (Signage)
-Web UI（ブラウザ画面の「Digital Signage」タブ）から画像をアップロードし、接続されたローカルディスプレイに直接全画面表示（アスペクト比維持）できます。  
+Web UI から画像をアップロードし、接続されたディスプレイに直接全画面表示できます。  
 CLIから直接画像ファイルを指定して全画面表示することも可能です:
 ```bash
 $ uv run main.py signage -i /path/to/image.png --fullscreen
