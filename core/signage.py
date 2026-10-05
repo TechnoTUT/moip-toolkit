@@ -1,6 +1,6 @@
 """
 core.signage
-Local digital signage display using SDL2 renderer.
+Local digital signage display using SDL2/OpenGL.
 Renders static images in fullscreen or windowed mode with aspect ratio preservation.
 """
 from __future__ import annotations
@@ -14,6 +14,18 @@ import numpy as np
 
 import sdl2
 import sdl2.ext
+try:
+    from OpenGL.GL import (
+        GL_TEXTURE_2D, GL_PROJECTION, GL_MODELVIEW, GL_COLOR_BUFFER_BIT,
+        GL_RGBA, GL_UNSIGNED_BYTE, GL_QUADS, GL_LINEAR, GL_NEAREST,
+        GL_TEXTURE_MAG_FILTER, GL_TEXTURE_MIN_FILTER,
+        glEnable, glViewport, glMatrixMode, glLoadIdentity, glOrtho,
+        glGenTextures, glBindTexture, glTexImage2D, glTexParameteri,
+        glTexSubImage2D, glClearColor, glClear, glBegin, glTexCoord2f,
+        glVertex2f, glEnd, glDeleteTextures, glEnable as glEnable2D
+    )
+except Exception:
+    pass
 
 
 def load_image(image_path: str) -> tuple[bytes, int, int]:
@@ -43,20 +55,20 @@ def load_image(image_path: str) -> tuple[bytes, int, int]:
     return rgba.tobytes(), w, h
 
 
-def create_texture_from_rgba(renderer, raw_bytes: bytes, w: int, h: int):
-    """Create and update an SDL2 RGBA texture."""
-    texture = sdl2.SDL_CreateTexture(
-        renderer,
-        sdl2.SDL_PIXELFORMAT_RGBA32,
-        sdl2.SDL_TEXTUREACCESS_STATIC,
-        w,
-        h
-    )
-    if not texture:
-        raise RuntimeError(f"SDL_CreateTexture Error: {sdl2.SDL_GetError()}")
+def create_texture_from_rgba(raw_bytes: bytes, w: int, h: int) -> int:
+    """Create a GL texture from an RGBA byte buffer."""
+    texture_ids = glGenTextures(1)
+    texture_id = int(texture_ids[0]) if hasattr(texture_ids, "__getitem__") else int(texture_ids)
+    glBindTexture(GL_TEXTURE_2D, texture_id)
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, raw_bytes)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+    return texture_id
 
-    sdl2.SDL_UpdateTexture(texture, None, raw_bytes, w * 4)
-    return texture
+
+def update_texture_from_rgba(texture_id: int, raw_bytes: bytes, w: int, h: int) -> None:
+    glBindTexture(GL_TEXTURE_2D, texture_id)
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, raw_bytes)
 
 
 def calculate_dest_rect(img_w: int, img_h: int, win_w: int, win_h: int) -> sdl2.SDL_Rect:
@@ -78,13 +90,44 @@ def calculate_dest_rect(img_w: int, img_h: int, win_w: int, win_h: int) -> sdl2.
     return sdl2.SDL_Rect(draw_x, draw_y, draw_w, draw_h)
 
 
+def draw_texture(texture_id: int, tex_w: int, tex_h: int, win_w: int, win_h: int) -> None:
+    """Draw the RGBA texture with aspect-ratio-preserving centered scaling."""
+    glEnable(GL_TEXTURE_2D)
+    glViewport(0, 0, win_w, win_h)
+    glMatrixMode(GL_PROJECTION)
+    glLoadIdentity()
+    glOrtho(-1, 1, -1, 1, -1, 1)
+    glMatrixMode(GL_MODELVIEW)
+    glLoadIdentity()
+
+    glBindTexture(GL_TEXTURE_2D, texture_id)
+    glClearColor(0.0, 0.0, 0.0, 1.0)
+    glClear(GL_COLOR_BUFFER_BIT)
+
+    src_ratio = tex_w / max(tex_h, 1)
+    dst_ratio = win_w / max(win_h, 1)
+    if src_ratio > dst_ratio:
+        scale_x = 1.0
+        scale_y = dst_ratio / src_ratio
+    else:
+        scale_x = src_ratio / dst_ratio
+        scale_y = 1.0
+
+    glBegin(GL_QUADS)
+    glTexCoord2f(0.0, 1.0); glVertex2f(-scale_x, -scale_y)
+    glTexCoord2f(1.0, 1.0); glVertex2f( scale_x, -scale_y)
+    glTexCoord2f(1.0, 0.0); glVertex2f( scale_x,  scale_y)
+    glTexCoord2f(0.0, 0.0); glVertex2f(-scale_x,  scale_y)
+    glEnd()
+
+
 def run_signage(
     image_path: str,
     fullscreen: bool = True,
     command_q=None,
     status_q=None
 ):
-    """Main loop for digital signage display using SDL2 renderer."""
+    """Main loop for digital signage display using SDL2/OpenGL."""
     try:
         raw_bytes, img_w, img_h = load_image(image_path)
     except Exception as e:
@@ -99,13 +142,16 @@ def run_signage(
         raise RuntimeError(err)
 
     window = None
-    renderer = None
-    texture = None
+    texture_id = None
+    gl_context = None
 
     try:
-        flags = sdl2.SDL_WINDOW_RESIZABLE
+        flags = sdl2.SDL_WINDOW_OPENGL | sdl2.SDL_WINDOW_RESIZABLE
         if fullscreen:
             flags |= sdl2.SDL_WINDOW_FULLSCREEN_DESKTOP
+
+        sdl2.SDL_GL_SetAttribute(sdl2.SDL_GL_CONTEXT_MAJOR_VERSION, 2)
+        sdl2.SDL_GL_SetAttribute(sdl2.SDL_GL_CONTEXT_MINOR_VERSION, 1)
 
         window = sdl2.SDL_CreateWindow(
             b"Digital Signage",
@@ -118,20 +164,15 @@ def run_signage(
         if not window:
             raise RuntimeError(f"SDL_CreateWindow Error: {sdl2.SDL_GetError()}")
 
-        renderer = sdl2.SDL_CreateRenderer(
-            window,
-            -1,
-            sdl2.SDL_RENDERER_ACCELERATED | sdl2.SDL_RENDERER_PRESENTVSYNC
-        )
-        if not renderer:
-            # Fallback to software renderer if hardware accelerated fails
-            renderer = sdl2.SDL_CreateRenderer(window, -1, sdl2.SDL_RENDERER_SOFTWARE)
-            if not renderer:
-                raise RuntimeError(f"SDL_CreateRenderer Error: {sdl2.SDL_GetError()}")
+        gl_context = sdl2.SDL_GL_CreateContext(window)
+        if not gl_context:
+            raise RuntimeError(f"SDL_GL_CreateContext Error: {sdl2.SDL_GetError()}")
+        if sdl2.SDL_GL_SetSwapInterval(0) != 0:
+            sdl2.SDL_GL_SetSwapInterval(1)
 
         sdl2.SDL_ShowCursor(sdl2.SDL_DISABLE if fullscreen else sdl2.SDL_ENABLE)
 
-        texture = create_texture_from_rgba(renderer, raw_bytes, img_w, img_h)
+        texture_id = create_texture_from_rgba(raw_bytes, img_w, img_h)
 
         if status_q:
             status_q.put({
@@ -178,9 +219,9 @@ def run_signage(
                             new_path = cmd.get("image_path")
                             try:
                                 new_bytes, new_w, new_h = load_image(new_path)
-                                if texture:
-                                    sdl2.SDL_DestroyTexture(texture)
-                                texture = create_texture_from_rgba(renderer, new_bytes, new_w, new_h)
+                                if texture_id is not None:
+                                    glDeleteTextures([texture_id])
+                                texture_id = create_texture_from_rgba(new_bytes, new_w, new_h)
                                 img_w, img_h = new_w, new_h
                                 image_path = new_path
                                 needs_redraw = True
@@ -205,15 +246,8 @@ def run_signage(
                 sdl2.SDL_GetWindowSize(window, w_ptr, h_ptr)
                 win_w, win_h = w_ptr.value, h_ptr.value
 
-                dest_rect = calculate_dest_rect(img_w, img_h, win_w, win_h)
-
-                # Clear background to black
-                sdl2.SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255)
-                sdl2.SDL_RenderClear(renderer)
-
-                # Render image
-                sdl2.SDL_RenderCopy(renderer, texture, None, dest_rect)
-                sdl2.SDL_RenderPresent(renderer)
+                draw_texture(texture_id, img_w, img_h, win_w, win_h)
+                sdl2.SDL_GL_SwapWindow(window)
                 needs_redraw = False
 
             time.sleep(0.016)
@@ -223,10 +257,11 @@ def run_signage(
             status_q.put({"type": "error", "error": str(e)})
         raise
     finally:
-        if texture:
-            sdl2.SDL_DestroyTexture(texture)
-        if renderer:
-            sdl2.SDL_DestroyRenderer(renderer)
+        if texture_id is not None:
+            try:
+                glDeleteTextures([texture_id])
+            except Exception:
+                pass
         if window:
             sdl2.SDL_DestroyWindow(window)
         sdl2.SDL_Quit()
