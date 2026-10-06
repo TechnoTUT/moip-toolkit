@@ -496,14 +496,12 @@ def run_signage(
             if not running:
                 break
 
-            if needs_redraw:
-                w_ptr, h_ptr = sdl2.c_int(), sdl2.c_int()
-                sdl2.SDL_GetWindowSize(window, w_ptr, h_ptr)
-                win_w, win_h = w_ptr.value, h_ptr.value
+            w_ptr, h_ptr = sdl2.c_int(), sdl2.c_int()
+            sdl2.SDL_GetWindowSize(window, w_ptr, h_ptr)
+            win_w, win_h = w_ptr.value, h_ptr.value
 
-                draw_texture(texture_id, img_w, img_h, win_w, win_h)
-                sdl2.SDL_GL_SwapWindow(window)
-                needs_redraw = False
+            draw_texture(texture_id, img_w, img_h, win_w, win_h)
+            sdl2.SDL_GL_SwapWindow(window)
 
             time.sleep(0.016)
 
