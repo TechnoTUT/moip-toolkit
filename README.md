@@ -1,4 +1,4 @@
-# utone-ndi-utils
+# moip-toolkit
 NDIを活用することでDJイベント "The Utopia Tone" の映像伝送をIPネットワーク上に移行します。  
 PythonとSDL2を使用してNDIソースを受信し全画面表示を行ったり、OpenCVを使用してNDIソースの送信を行います。また、FastAPIによるWeb APIおよびブラウザUIからの遠隔操作に対応しています。
 
