@@ -163,6 +163,8 @@ class SignageImageItem(BaseModel):
 class SignageStartRequest(BaseModel):
     filename: Optional[str] = None
     fullscreen: bool = True
+    use_framebuffer: bool = False
+    fb_device: str = "/dev/fb0"
 
 
 class SignageStatus(BaseModel):

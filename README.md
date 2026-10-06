@@ -86,6 +86,14 @@ $ uv run main.py signage -i /path/to/image.png --fullscreen
 ```
 *(※`-i` を省略した場合は、Web UI等でアップロードされた最新の画像が表示されます)*
 
+#### CLI環境（TTY）での表示
+`--framebuffer` オプションを使用すると、SDL2/OpenGLの代わりにLinuxフレームバッファ（`/dev/fb0`）に直接描画します。SSH接続やコンソール（TTY）などのGUI環境がない場合でも表示できます。
+```bash
+$ uv run main.py signage -i /path/to/image.png --framebuffer
+```
+- `--fb-device` オプションでフレームバッファデバイスのパスを変更できます（デフォルト: `/dev/fb0`）
+- フレームバッファへの書き込みにはroot権限が必要な場合があります
+
 ---
 
 ## ディレクトリ構成
@@ -95,7 +103,7 @@ utone-ndi-utils/
 │   ├── rx.py               # SDL2初期化、OpenGL描画、フレーム同期、NDI受信定義
 │   ├── tx.py               # カメラ取得スレッド、映像/音声NDI送信スレッド
 │   ├── multiview.py        # 複数NDIグリッド表示ロジック
-│   └── signage.py          # SDL2レンダラーによる画像サイネージ描画
+│   └── signage.py          # SDL2/OpenGLまたはLinuxフレームバッファによる画像サイネージ描画
 ├── cli/                    # コマンドラインUI定義
 │   ├── menu.py             # 対話型NDIソース選択メニュー
 │   ├── rx_cmd.py           # rx コマンド定義

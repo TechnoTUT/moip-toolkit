@@ -12,7 +12,9 @@ from core.signage import run_signage
 @click.command(name="signage", help="Display a static image in fullscreen as digital signage.")
 @click.option("-i", "--image", "image_path", type=click.Path(exists=True, dir_okay=False), default=None, help="Path to the image file to display.")
 @click.option("--fullscreen/--windowed", default=True, show_default=True, help="Display in fullscreen or windowed mode.")
-def signage_command(image_path: str | None, fullscreen: bool):
+@click.option("--framebuffer", is_flag=True, default=False, help="Use Linux framebuffer (/dev/fb0) instead of SDL2/OpenGL. Works in CLI/TTY environments.")
+@click.option("--fb-device", default="/dev/fb0", show_default=True, help="Framebuffer device path (only with --framebuffer).")
+def signage_command(image_path: str | None, fullscreen: bool, use_framebuffer: bool, fb_device: str):
     if not image_path:
         # Search in data/signage
         candidates = sorted(
@@ -33,9 +35,12 @@ def signage_command(image_path: str | None, fullscreen: bool):
             return
 
     try:
-        click.echo(f"Starting digital signage with image: {image_path} (fullscreen={fullscreen})")
+        if use_framebuffer:
+            click.echo(f"Starting digital signage with image: {image_path} (framebuffer={fb_device})")
+        else:
+            click.echo(f"Starting digital signage with image: {image_path} (fullscreen={fullscreen})")
         click.echo("Press ESC or 'q' to quit.")
-        run_signage(image_path, fullscreen=fullscreen)
+        run_signage(image_path, fullscreen=fullscreen, use_framebuffer=use_framebuffer, fb_device=fb_device)
     except KeyboardInterrupt:
         click.echo("\nDigital signage stopped by user.")
     except Exception as e:

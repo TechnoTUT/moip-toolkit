@@ -140,6 +140,8 @@ const signageStatus = ref<SignageStatus>({
 const signageImages = ref<SignageImage[]>([])
 const selectedSignageImage = ref<string | null>(null)
 const signageFullscreen = ref(true)
+const signageUseFramebuffer = ref(false)
+const signageFbDevice = ref('/dev/fb0')
 const signageLoading = ref(false)
 const signageUploading = ref(false)
 const signageError = ref<string | null>(null)
@@ -700,7 +702,9 @@ async function startSignageDisplay(filename?: string) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         filename: targetFile,
-        fullscreen: signageFullscreen.value
+        fullscreen: signageFullscreen.value,
+        use_framebuffer: signageUseFramebuffer.value,
+        fb_device: signageFbDevice.value
       })
     })
     if (!res.ok) {
@@ -1561,6 +1565,16 @@ onUnmounted(() => {
                   class="rounded border-slate-300 dark:border-slate-700 text-[#C7000A] focus:ring-[#C7000A]"
                 />
                 <span>Fullscreen</span>
+              </label>
+
+              <!-- Framebuffer Checkbox -->
+              <label class="flex items-center gap-2 text-xs font-medium text-slate-600 dark:text-slate-300 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  v-model="signageUseFramebuffer"
+                  class="rounded border-slate-300 dark:border-slate-700 text-[#C7000A] focus:ring-[#C7000A]"
+                />
+                <span>Framebuffer (TTY)</span>
               </label>
 
               <!-- Start / Stop Button -->

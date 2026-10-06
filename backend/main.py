@@ -488,7 +488,7 @@ def start_signage(req: SignageStartRequest):
         target_path = os.path.join(SIGNAGE_DIR, images[0].filename)
 
     try:
-        signage_runner.start(target_path, fullscreen=req.fullscreen)
+        signage_runner.start(target_path, fullscreen=req.fullscreen, use_framebuffer=req.use_framebuffer, fb_device=req.fb_device)
         return signage_runner.get_status()
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))

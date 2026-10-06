@@ -12,14 +12,16 @@ from typing import Optional
 from backend.models import SignageStatus, SignageStartRequest
 
 
-def _signage_worker(command_q: mp.Queue, status_q: mp.Queue, image_path: str, fullscreen: bool):
+def _signage_worker(command_q: mp.Queue, status_q: mp.Queue, image_path: str, fullscreen: bool, use_framebuffer: bool = False, fb_device: str = "/dev/fb0"):
     from core.signage import run_signage
     try:
         run_signage(
             image_path=image_path,
             fullscreen=fullscreen,
             command_q=command_q,
-            status_q=status_q
+            status_q=status_q,
+            use_framebuffer=use_framebuffer,
+            fb_device=fb_device
         )
     except Exception as e:
         status_q.put({"type": "error", "error": str(e)})
@@ -67,7 +69,7 @@ class SignageRunner:
             except queue.Empty:
                 break
 
-    def start(self, image_path: str, fullscreen: bool = True):
+    def start(self, image_path: str, fullscreen: bool = True, use_framebuffer: bool = False, fb_device: str = "/dev/fb0"):
         self.stop()
 
         if not os.path.exists(image_path):
@@ -86,7 +88,7 @@ class SignageRunner:
 
         self.process = self._ctx.Process(
             target=_signage_worker,
-            args=(self.command_q, self.status_q, image_path, fullscreen),
+            args=(self.command_q, self.status_q, image_path, fullscreen, use_framebuffer, fb_device),
             daemon=True
         )
         self.process.start()
