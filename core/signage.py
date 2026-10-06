@@ -97,7 +97,12 @@ def load_image(image_path: str) -> tuple[bytes, int, int]:
 def create_texture_from_rgba(raw_bytes: bytes, w: int, h: int) -> int:
     """Create a GL texture from an RGBA byte buffer."""
     texture_ids = glGenTextures(1)
-    texture_id = int(texture_ids[0]) if hasattr(texture_ids, "__getitem__") else int(texture_ids)
+    if isinstance(texture_ids, (list, tuple)):
+        texture_id = int(texture_ids[0])
+    elif hasattr(texture_ids, "__iter__") and not getattr(texture_ids, "ndim", None) == 0:
+        texture_id = int(list(texture_ids)[0])
+    else:
+        texture_id = int(texture_ids)
     glBindTexture(GL_TEXTURE_2D, texture_id)
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, raw_bytes)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)

@@ -12,7 +12,7 @@ from core.signage import run_signage
 @click.command(name="signage", help="Display a static image in fullscreen as digital signage.")
 @click.option("-i", "--image", "image_path", type=click.Path(exists=True, dir_okay=False), default=None, help="Path to the image file to display.")
 @click.option("--fullscreen/--windowed", default=True, show_default=True, help="Display in fullscreen or windowed mode.")
-@click.option("--framebuffer", is_flag=True, default=False, help="Use Linux framebuffer (/dev/fb0) instead of SDL2/OpenGL. Works in CLI/TTY environments.")
+@click.option("--framebuffer", "use_framebuffer", is_flag=True, default=False, help="Use Linux framebuffer (/dev/fb0) instead of SDL2/OpenGL. Works in CLI/TTY environments.")
 @click.option("--fb-device", default="/dev/fb0", show_default=True, help="Framebuffer device path (only with --framebuffer).")
 def signage_command(image_path: str | None, fullscreen: bool, use_framebuffer: bool, fb_device: str):
     if not image_path:
