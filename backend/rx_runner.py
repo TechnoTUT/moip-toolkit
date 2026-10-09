@@ -75,8 +75,37 @@ def _rx_worker_process(command_q: mp.Queue, status_q: mp.Queue, init_options: di
         texture_id = glGenTextures(1)
         overlay_tex_id = glGenTextures(1)
         receiver: Optional[Receiver] = None
+        # A single Receiver instance is reused for the whole process lifetime.
+        # Re-creating it on every reconnect leaked native NDI buffers because the
+        # Receiver <-> FrameSync reference cycle delayed NDIlib_recv_destroy.
+        rx_obj: Optional[Receiver] = None
         vf = VideoFrameSync()
         af = AudioFrameSync() if AudioFrameSync is not None else None
+
+        def drop_receiver():
+            nonlocal receiver
+            if receiver is not None:
+                try:
+                    receiver.disconnect()
+                except Exception:
+                    pass
+            receiver = None
+
+        def acquire_receiver():
+            nonlocal rx_obj, receiver
+            if rx_obj is None:
+                rx_obj = Receiver(
+                    color_format=options.recv_fmt.value,
+                    bandwidth=options.recv_bandwidth.value,
+                )
+                rx_obj.frame_sync.set_video_frame(vf)
+                if af is not None:
+                    try:
+                        rx_obj.frame_sync.set_audio_frame(af)
+                    except Exception:
+                        pass
+            receiver = rx_obj
+            return rx_obj
 
         current_source_name = options.sender_name
         running = True
@@ -111,8 +140,7 @@ def _rx_worker_process(command_q: mp.Queue, status_q: mp.Queue, init_options: di
                         new_source = cmd.get("sender_name")
                         if new_source and new_source != current_source_name:
                             current_source_name = new_source
-                            if receiver is not None:
-                                receiver = None
+                            drop_receiver()
                             is_connected = False
                             reconnect_cooldown_until = 0.0
                             is_texture_initialized = False
@@ -172,17 +200,7 @@ def _rx_worker_process(command_q: mp.Queue, status_q: mp.Queue, init_options: di
                                     break
 
                             if matched is not None:
-                                receiver = Receiver(
-                                    color_format=options.recv_fmt.value,
-                                    bandwidth=options.recv_bandwidth.value,
-                                )
-                                receiver.frame_sync.set_video_frame(vf)
-                                if af is not None:
-                                    try:
-                                        receiver.frame_sync.set_audio_frame(af)
-                                    except Exception:
-                                        pass
-                                receiver.set_source(matched)
+                                acquire_receiver().set_source(matched)
                                 connect_timeout_until = now + 10.0
                                 last_connected_time = now
                                 print(f"[RX RUNNER] Found source {matched.name}, initiating connection...", flush=True)
@@ -190,7 +208,7 @@ def _rx_worker_process(command_q: mp.Queue, status_q: mp.Queue, init_options: di
                                 reconnect_cooldown_until = now + 0.5
                         except Exception as e:
                             print(f"[RX RUNNER] Error creating receiver for {current_source_name}: {e}", flush=True)
-                            receiver = None
+                            drop_receiver()
                             reconnect_cooldown_until = now + 1.0
                 else:
                     # Asynchronous connection handshake in progress
@@ -208,7 +226,7 @@ def _rx_worker_process(command_q: mp.Queue, status_q: mp.Queue, init_options: di
                             print(f"[RX RUNNER] Capture attempt exception: {e}", flush=True)
                     elif now >= connect_timeout_until:
                         print(f"[RX RUNNER] Connection timeout waiting for {current_source_name}", flush=True)
-                        receiver = None
+                        drop_receiver()
                         reconnect_cooldown_until = now + 1.0
 
                 # Yield CPU when waiting for source (cap waiting loop at ~60fps)
@@ -221,18 +239,21 @@ def _rx_worker_process(command_q: mp.Queue, status_q: mp.Queue, init_options: di
                     # Truly disconnected after 4 seconds of continuous disconnection
                     print(f"[RX RUNNER] Connection lost to {current_source_name}", flush=True)
                     is_connected = False
-                    receiver = None
+                    drop_receiver()
                     reconnect_cooldown_until = now + 1.0
                     last_frame_data, last_frame_w, last_frame_h = None, 0, 0
+                    last_timecode = -1.0
                     is_texture_initialized = False
 
                 if receiver is not None:
+                    new_frame = False
                     try:
                         receiver.frame_sync.capture_video()
                         tex_w, tex_h = vf.get_resolution()
                         curr_timecode = vf.get_timecode_posix()
                         if tex_w > 0 and tex_h > 0 and vf.get_data_size() > 0:
                             if curr_timecode != last_timecode or last_frame_data is None:
+                                new_frame = True
                                 last_timecode = curr_timecode
                                 last_frame_data = bytes(vf)
                                 if last_frame_w != tex_w or last_frame_h != tex_h:
@@ -251,6 +272,15 @@ def _rx_worker_process(command_q: mp.Queue, status_q: mp.Queue, init_options: di
                         import traceback
                         print(f"[RX RUNNER] Error rendering frame: {e}", flush=True)
                         traceback.print_exc()
+                        # Force a clean reconnect instead of looping on a broken receiver
+                        drop_receiver()
+                        is_connected = False
+                        reconnect_cooldown_until = now + 1.0
+                        last_frame_data = None
+                        last_timecode = -1.0
+                        is_texture_initialized = False
+                    if not new_frame:
+                        time.sleep(0.002)
 
                     # Audio capture & dBFS calculation (throttled to ~15fps to reduce NumPy CPU usage)
                     if af is not None:

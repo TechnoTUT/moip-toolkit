@@ -59,6 +59,8 @@ class NDIPreviewSession:
 
     def _worker(self):
         receiver: Optional[Receiver] = None
+        rx_obj: Optional[Receiver] = None
+        connect_deadline = 0.0
         vf = VideoFrameSync()
         reconnect_time = 0.0
 
@@ -81,7 +83,18 @@ class NDIPreviewSession:
                 gc.collect()
 
             if receiver is None or not receiver.is_connected():
-                if now >= reconnect_time:
+                if receiver is not None:
+                    # Already created; give it time to connect before retrying
+                    if now < connect_deadline:
+                        time.sleep(0.1)
+                        continue
+                    try:
+                        receiver.disconnect()
+                    except Exception:
+                        pass
+                    receiver = None
+                    reconnect_time = now + 1.0
+                if receiver is None and now >= reconnect_time:
                     try:
                         matched = None
                         # Check shared scanner finder first, then fallback to self.finder
@@ -102,12 +115,15 @@ class NDIPreviewSession:
                                 break
 
                         if matched is not None:
-                            receiver = Receiver(
-                                color_format=RecvColorFormat.BGRX_BGRA,
-                                bandwidth=RecvBandwidth.lowest,
-                            )
-                            receiver.frame_sync.set_video_frame(vf)
+                            if rx_obj is None:
+                                rx_obj = Receiver(
+                                    color_format=RecvColorFormat.BGRX_BGRA,
+                                    bandwidth=RecvBandwidth.lowest,
+                                )
+                                rx_obj.frame_sync.set_video_frame(vf)
+                            receiver = rx_obj
                             receiver.set_source(matched)
+                            connect_deadline = now + 10.0
                         else:
                             reconnect_time = now + 1.0
                     except Exception as e:
@@ -203,6 +219,10 @@ class NDIPreviewSession:
 
             except Exception as e:
                 logger.warning(f"Error capturing preview frame for {self.source_name}: {e}")
+                try:
+                    receiver.disconnect()
+                except Exception:
+                    pass
                 receiver = None
                 reconnect_time = now + 2.0
 

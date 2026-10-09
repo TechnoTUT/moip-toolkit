@@ -5,6 +5,7 @@ NDI Receiver, SDL2/OpenGL display logic, and playback loop.
 from __future__ import annotations
 
 import enum
+import functools
 import time
 import sys
 from typing import NamedTuple, Optional, TYPE_CHECKING
@@ -185,6 +186,7 @@ FONT_5X7 = {
 }
 
 
+@functools.lru_cache(maxsize=16)
 def create_text_rgba_image(text: str, scale: int = 4, fg_color=(255, 255, 255, 255), bg_color=(20, 24, 33, 220)) -> tuple[bytes, int, int]:
     """Generates an RGBA byte buffer rendering the given text with a 5x7 font."""
     char_w = 6
