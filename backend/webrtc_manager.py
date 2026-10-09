@@ -54,11 +54,17 @@ class NDIWebRTCVideoTrack(VideoStreamTrack):
         preview_manager.cleanup_idle_sessions()
 
 
+MAX_WEBRTC_CONNECTIONS = 4
+
+
 class WebRTCManager:
-    def __init__(self):
+    def __init__(self, max_connections: int = MAX_WEBRTC_CONNECTIONS):
         self.pcs: Set[RTCPeerConnection] = set()
+        self.max_connections = max_connections
 
     async def handle_offer(self, source_name: str, sdp: str, sdp_type: str) -> dict:
+        if len(self.pcs) >= self.max_connections:
+            raise RuntimeError(f"Too many WebRTC connections (max {self.max_connections})")
         pc = RTCPeerConnection()
         self.pcs.add(pc)
 
