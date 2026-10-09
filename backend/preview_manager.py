@@ -12,6 +12,7 @@ import threading
 import logging
 import gc
 from typing import Dict, Optional, Set, Tuple
+from dataclasses import dataclass
 import numpy as np
 import cv2
 
@@ -25,13 +26,19 @@ from core.reconnecting_receiver import ReconnectingReceiver
 logger = logging.getLogger(__name__)
 
 
+@dataclass(slots=True)
+class PreviewSubscriber:
+    fps: int = 3
+    max_width: int = 360
+    raw: bool = False
+
+
 class NDIPreviewSession:
     """Manages a lightweight NDI Receiver connection for a single source."""
     def __init__(self, source_name: str, finder: Finder):
         self.source_name = source_name
         self.finder = finder
-        # Subscribers map: queue -> (target_fps, max_width)
-        self.subscribers: Dict[asyncio.Queue, Tuple[int, int]] = {}
+        self.subscribers: Dict[asyncio.Queue, PreviewSubscriber] = {}
         self.running = False
         self.thread: Optional[threading.Thread] = None
         self.lock = threading.Lock()
@@ -46,13 +53,12 @@ class NDIPreviewSession:
     def stop(self):
         self.running = False
         if self.thread and self.thread.is_alive():
-            self.thread.join(timeout=0.3)
+            self.thread.join(timeout=0.5)
         self.thread = None
 
     def add_subscriber(self, q: asyncio.Queue, fps: int = 3, max_width: int = 360, raw: bool = False):
         with self.lock:
-            # (fps, max_width, raw)
-            self.subscribers[q] = (fps, max_width, raw)
+            self.subscribers[q] = PreviewSubscriber(fps=fps, max_width=max_width, raw=raw)
 
     def remove_subscriber(self, q: asyncio.Queue):
         with self.lock:
@@ -70,8 +76,8 @@ class NDIPreviewSession:
             for f in finders:
                 try:
                     f.wait_for_sources(0)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("wait_for_sources non-blocking poll failed: %s", e)
                 for s in f:
                     if s.name == self.source_name or s.stream_name == self.source_name:
                         return s
@@ -105,16 +111,13 @@ class NDIPreviewSession:
             # Check which subscribers need a frame
             active_targets = []
             max_requested_fps = 1
-            for q, sub_info in subs.items():
-                fps = sub_info[0]
-                max_w = sub_info[1]
-                is_raw = sub_info[2] if len(sub_info) > 2 else False
-                max_requested_fps = max(max_requested_fps, fps)
+            for q, sub in subs.items():
+                max_requested_fps = max(max_requested_fps, sub.fps)
                 # Allow a slight leeway (0.85 of interval) so timing jitter doesn't skip frames
-                min_interval = 0.85 / max(1, fps)
+                min_interval = 0.85 / max(1, sub.fps)
                 last_t = last_sub_send_time.get(q, 0.0)
                 if (now - last_t) >= min_interval:
-                    active_targets.append((q, max_w, is_raw))
+                    active_targets.append((q, sub.max_width, sub.raw))
 
             if not active_targets:
                 time.sleep(0.005)
@@ -151,10 +154,10 @@ class NDIPreviewSession:
                             if q.full():
                                 try:
                                     q.get_nowait()
-                                except Exception:
+                                except queue.Empty:
                                     pass
                             q.put_nowait(target_arr)
-                        except Exception:
+                        except asyncio.QueueFull:
                             pass
 
                     # Deliver JPEG frames
@@ -184,10 +187,10 @@ class NDIPreviewSession:
                                         if q.full():
                                             try:
                                                 q.get_nowait()
-                                            except Exception:
+                                            except queue.Empty:
                                                 pass
                                         q.put_nowait(jpeg_bytes)
-                                    except Exception:
+                                    except asyncio.QueueFull:
                                         pass
 
             except Exception as e:

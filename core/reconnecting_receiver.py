@@ -9,8 +9,11 @@ reconnecting is done via disconnect() + set_source().
 from __future__ import annotations
 
 from typing import Callable, Optional
+import logging
 
 from cyndilib.receiver import Receiver
+
+logger = logging.getLogger(__name__)
 
 
 class ReconnectingReceiver:
@@ -42,8 +45,8 @@ class ReconnectingReceiver:
             if self._af is not None:
                 try:
                     self._rx.frame_sync.set_audio_frame(self._af)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Failed to set audio frame on receiver: %s", e)
         return self._rx
 
     def attach(self, source, now: float) -> Receiver:
@@ -59,8 +62,8 @@ class ReconnectingReceiver:
         if self.receiver is not None:
             try:
                 self.receiver.disconnect()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Error during receiver disconnect: %s", e)
         self.receiver = None
         self._retry_at = now + (self.retry_interval if cooldown is None else cooldown)
 
@@ -86,13 +89,15 @@ class ReconnectingReceiver:
             return False
         try:
             src = find_source()
-        except Exception:
+        except Exception as e:
+            logger.debug("Error resolving NDI source: %s", e)
             src = None
         if src is None:
             self._retry_at = now + self.retry_interval
             return False
         try:
             self.attach(src, now)
-        except Exception:
+        except Exception as e:
+            logger.warning("Error attaching NDI source %s: %s", getattr(src, 'name', src), e)
             self.drop(now, cooldown=2.0)
         return False

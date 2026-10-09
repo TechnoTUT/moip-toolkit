@@ -15,6 +15,7 @@ from cyndilib.wrapper.ndi_recv import RecvColorFormat, RecvBandwidth
 from cyndilib.video_frame import VideoFrameSync
 from cyndilib.receiver import Receiver
 from cyndilib.finder import Finder
+from core.reconnecting_receiver import ReconnectingReceiver
 if TYPE_CHECKING:
     from cyndilib.finder import Source
 
@@ -340,15 +341,27 @@ def play_sdl(options: Options, finder: Finder, log_fn=print):
     event = sdl2.SDL_Event()
     
     is_connected = False
-    reconnect_cooldown_until = 0.0
-    last_frame_data = None
     last_frame_w, last_frame_h = 0, 0
     is_texture_initialized = False
     start_time = time.time()
     local_ip = get_local_ip()
 
+    vf = VideoFrameSync()
+    rr = ReconnectingReceiver(
+        options.recv_fmt.value,
+        options.recv_bandwidth.value,
+        vf,
+        connect_timeout=5.0,
+        retry_interval=2.0
+    )
+
+    def find_source():
+        try:
+            return get_source(finder, options.sender_name, timeout_seconds=0.5)
+        except Exception:
+            return None
+
     try:
-        vf = VideoFrameSync()
         while running:
             while sdl2.SDL_PollEvent(event):
                 if event.type == sdl2.SDL_QUIT:
@@ -362,69 +375,49 @@ def play_sdl(options: Options, finder: Finder, log_fn=print):
             now = time.time()
             show_banner = (now - start_time < 30.0)
 
-            if not is_connected:
+            if not rr.update(find_source, now):
+                is_connected = False
                 render_waiting_message(overlay_tex_id, local_ip, options.sender_name, win_w, win_h)
-                if time.time() >= reconnect_cooldown_until:
-                    log_fn("Attempting to connect to NDI source...")
-                    try:
-                        source = get_source(finder, options.sender_name)
-                        receiver = Receiver(
-                            color_format=options.recv_fmt.value,
-                            bandwidth=options.recv_bandwidth.value,
-                        )
-                        receiver.frame_sync.set_video_frame(vf)
-                        receiver.set_source(source)
+                sdl2.SDL_GL_SwapWindow(window)
+                time.sleep(0.016)
+                continue
 
-                        i = 0
-                        while not receiver.is_connected():
-                            if i > 30:
-                                raise Exception("Timeout")
-                            time.sleep(0.1)
-                            i += 1
-                        
-                        wait_for_first_frame(receiver)
-                        is_connected = True
-                        log_fn("Connected to NDI source.")
-                    except Exception as e:
-                        log_fn(f"Error during connection attempt: {e}")
-                        receiver = None
-                        reconnect_cooldown_until = time.time() + 5.0
+            receiver = rr.receiver
+            if not is_connected:
+                is_connected = True
+                log_fn(f"Connected to NDI source: {options.sender_name}")
+
+            try:
+                receiver.frame_sync.capture_video()
+                tex_w, tex_h = vf.get_resolution()
+                if tex_w > 0 and tex_h > 0 and vf.get_data_size() > 0:
+                    if last_frame_w != tex_w or last_frame_h != tex_h:
                         is_texture_initialized = False
-            else:
-                if not receiver or not receiver.is_connected():
-                    log_fn("Connection lost.")
-                    is_connected = False
-                    receiver = None
-                    reconnect_cooldown_until = time.time() + 5.0
-                    last_frame_data, last_frame_w, last_frame_h = None, 0, 0
-                    is_texture_initialized = False
-                else:
-                    try:
-                        receiver.frame_sync.capture_video()
-                        tex_w, tex_h = vf.get_resolution()
-                        if tex_w > 0 and tex_h > 0 and vf.get_data_size() > 0:
-                            last_frame_data = bytes(vf)
-                            if last_frame_w != tex_w or last_frame_h != tex_h:
-                                is_texture_initialized = False
-                            last_frame_w, last_frame_h = tex_w, tex_h
-                        
-                        is_texture_initialized = render_texture(
-                            last_frame_data, last_frame_w, last_frame_h, win_w, win_h,
-                            texture_id, options.recv_fmt, is_texture_initialized
-                        )
-                        if show_banner:
-                            render_ip_banner(overlay_tex_id, local_ip, options.sender_name, win_w, win_h)
-                    except Exception as e:
-                        log_fn(f"Error during frame capture or rendering: {e}")
-                        is_connected = False
-                        receiver = None
-                        reconnect_cooldown_until = time.time() + 5.0
-                        is_texture_initialized = False
+                    last_frame_w, last_frame_h = tex_w, tex_h
+
+                    with memoryview(vf) as mv:
+                        frame_arr = np.frombuffer(mv, dtype=np.uint8)
+                        try:
+                            is_texture_initialized = render_texture(
+                                frame_arr, last_frame_w, last_frame_h, win_w, win_h,
+                                texture_id, options.recv_fmt, is_texture_initialized
+                            )
+                        finally:
+                            del frame_arr
+
+                    if show_banner:
+                        render_ip_banner(overlay_tex_id, local_ip, options.sender_name, win_w, win_h)
+            except Exception as e:
+                log_fn(f"Error during frame capture or rendering: {e}")
+                rr.drop(now, cooldown=2.0)
+                is_connected = False
+                is_texture_initialized = False
 
             sdl2.SDL_GL_SwapWindow(window)
 
     finally:
         log_fn("Cleaning up resources...")
+        rr.drop()
         receiver = None
         glDeleteTextures(2, [texture_id, overlay_tex_id])
         sdl2.SDL_DestroyWindow(window)
