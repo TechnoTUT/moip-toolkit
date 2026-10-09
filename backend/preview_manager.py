@@ -20,6 +20,7 @@ from cyndilib.receiver import Receiver
 from cyndilib.video_frame import VideoFrameSync
 from cyndilib.wrapper.ndi_recv import RecvColorFormat, RecvBandwidth
 from backend.ndi_scanner import scanner
+from core.reconnecting_receiver import ReconnectingReceiver
 
 logger = logging.getLogger(__name__)
 
@@ -58,11 +59,25 @@ class NDIPreviewSession:
             self.subscribers.pop(q, None)
 
     def _worker(self):
-        receiver: Optional[Receiver] = None
-        rx_obj: Optional[Receiver] = None
-        connect_deadline = 0.0
         vf = VideoFrameSync()
-        reconnect_time = 0.0
+        rr = ReconnectingReceiver(RecvColorFormat.BGRX_BGRA, RecvBandwidth.lowest, vf)
+
+        def find_source():
+            # Check shared scanner finder first, then fallback to self.finder
+            finders = [scanner.finder]
+            if self.finder not in finders:
+                finders.append(self.finder)
+            for f in finders:
+                try:
+                    f.wait_for_sources(0)
+                except Exception:
+                    pass
+                for s in f:
+                    if s.name == self.source_name or s.stream_name == self.source_name:
+                        return s
+            return None
+
+        receiver: Optional[Receiver] = None
 
         last_sub_send_time: Dict[asyncio.Queue, float] = {}
         last_gc_time = time.time()
@@ -82,56 +97,10 @@ class NDIPreviewSession:
                 last_gc_time = now
                 gc.collect()
 
-            if receiver is None or not receiver.is_connected():
-                if receiver is not None:
-                    # Already created; give it time to connect before retrying
-                    if now < connect_deadline:
-                        time.sleep(0.1)
-                        continue
-                    try:
-                        receiver.disconnect()
-                    except Exception:
-                        pass
-                    receiver = None
-                    reconnect_time = now + 1.0
-                if receiver is None and now >= reconnect_time:
-                    try:
-                        matched = None
-                        # Check shared scanner finder first, then fallback to self.finder
-                        finders = [scanner.finder]
-                        if self.finder not in finders:
-                            finders.append(self.finder)
-
-                        for f in finders:
-                            try:
-                                f.wait_for_sources(0)
-                            except Exception:
-                                pass
-                            for s in f:
-                                if s.name == self.source_name or s.stream_name == self.source_name:
-                                    matched = s
-                                    break
-                            if matched is not None:
-                                break
-
-                        if matched is not None:
-                            if rx_obj is None:
-                                rx_obj = Receiver(
-                                    color_format=RecvColorFormat.BGRX_BGRA,
-                                    bandwidth=RecvBandwidth.lowest,
-                                )
-                                rx_obj.frame_sync.set_video_frame(vf)
-                            receiver = rx_obj
-                            receiver.set_source(matched)
-                            connect_deadline = now + 10.0
-                        else:
-                            reconnect_time = now + 1.0
-                    except Exception as e:
-                        logger.warning(f"Error connecting preview receiver to {self.source_name}: {e}")
-                        receiver = None
-                        reconnect_time = now + 2.0
+            if not rr.update(find_source, now):
                 time.sleep(0.1)
                 continue
+            receiver = rr.receiver
 
             # Check which subscribers need a frame
             active_targets = []
@@ -151,14 +120,18 @@ class NDIPreviewSession:
                 time.sleep(0.005)
                 continue
 
-            # Capture frame
+            # Capture frame (zero-copy: `arr` is a view of the NDI frame buffer and must be
+            # released before the next capture_video(); see the finally block below)
+            mv = None
+            arr = None
+            resized = None
             try:
                 receiver.frame_sync.capture_video()
                 w, h = vf.get_resolution()
                 data_size = vf.get_data_size()
                 if w > 0 and h > 0 and data_size > 0:
-                    raw_data = bytes(vf)
-                    arr = np.frombuffer(raw_data, dtype=np.uint8, count=w * h * 4).reshape((h, w, 4))
+                    mv = memoryview(vf)
+                    arr = np.frombuffer(mv, dtype=np.uint8, count=w * h * 4).reshape((h, w, 4))
 
                     # Separate raw subscribers and jpeg subscribers
                     # Group by max_width
@@ -219,12 +192,13 @@ class NDIPreviewSession:
 
             except Exception as e:
                 logger.warning(f"Error capturing preview frame for {self.source_name}: {e}")
-                try:
-                    receiver.disconnect()
-                except Exception:
-                    pass
+                rr.drop(now, cooldown=2.0)
                 receiver = None
-                reconnect_time = now + 2.0
+            finally:
+                arr = None
+                resized = None
+                if mv is not None:
+                    mv.release()
 
             # Clean up old queue timestamps
             for q in list(last_sub_send_time.keys()):

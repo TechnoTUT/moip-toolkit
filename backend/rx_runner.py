@@ -30,6 +30,7 @@ def _rx_worker_process(command_q: mp.Queue, status_q: mp.Queue, init_options: di
     except ImportError:
         AudioFrameSync = None
     from cyndilib.finder import Finder
+    from core.reconnecting_receiver import ReconnectingReceiver
     from core.rx import (
         RecvFmt, Bandwidth, Options, render_texture, render_waiting_message,
         render_ip_banner, get_local_ip, init_window
@@ -75,37 +76,18 @@ def _rx_worker_process(command_q: mp.Queue, status_q: mp.Queue, init_options: di
         texture_id = glGenTextures(1)
         overlay_tex_id = glGenTextures(1)
         receiver: Optional[Receiver] = None
-        # A single Receiver instance is reused for the whole process lifetime.
-        # Re-creating it on every reconnect leaked native NDI buffers because the
-        # Receiver <-> FrameSync reference cycle delayed NDIlib_recv_destroy.
-        rx_obj: Optional[Receiver] = None
         vf = VideoFrameSync()
         af = AudioFrameSync() if AudioFrameSync is not None else None
+        # Single long-lived Receiver reused across reconnects (see core.reconnecting_receiver)
+        rr = ReconnectingReceiver(
+            options.recv_fmt.value, options.recv_bandwidth.value, vf, af,
+            connect_timeout=10.0,
+        )
 
         def drop_receiver():
             nonlocal receiver
-            if receiver is not None:
-                try:
-                    receiver.disconnect()
-                except Exception:
-                    pass
+            rr.drop(time.time(), cooldown=0.0)
             receiver = None
-
-        def acquire_receiver():
-            nonlocal rx_obj, receiver
-            if rx_obj is None:
-                rx_obj = Receiver(
-                    color_format=options.recv_fmt.value,
-                    bandwidth=options.recv_bandwidth.value,
-                )
-                rx_obj.frame_sync.set_video_frame(vf)
-                if af is not None:
-                    try:
-                        rx_obj.frame_sync.set_audio_frame(af)
-                    except Exception:
-                        pass
-            receiver = rx_obj
-            return rx_obj
 
         current_source_name = options.sender_name
         running = True
@@ -115,7 +97,7 @@ def _rx_worker_process(command_q: mp.Queue, status_q: mp.Queue, init_options: di
         connect_timeout_until = 0.0
         last_connected_time = 0.0
 
-        last_frame_data = None
+        has_frame = False
         last_frame_w, last_frame_h = 0, 0
         last_timecode = -1.0
         is_texture_initialized = False
@@ -144,7 +126,7 @@ def _rx_worker_process(command_q: mp.Queue, status_q: mp.Queue, init_options: di
                             is_connected = False
                             reconnect_cooldown_until = 0.0
                             is_texture_initialized = False
-                            last_frame_data = None
+                            has_frame = False
                             # Reset banner start time on switch so user sees new source info
                             start_time = time.time()
                     elif action == "toggle_fullscreen":
@@ -200,7 +182,7 @@ def _rx_worker_process(command_q: mp.Queue, status_q: mp.Queue, init_options: di
                                     break
 
                             if matched is not None:
-                                acquire_receiver().set_source(matched)
+                                receiver = rr.attach(matched, now)
                                 connect_timeout_until = now + 10.0
                                 last_connected_time = now
                                 print(f"[RX RUNNER] Found source {matched.name}, initiating connection...", flush=True)
@@ -218,7 +200,7 @@ def _rx_worker_process(command_q: mp.Queue, status_q: mp.Queue, init_options: di
                             receiver.frame_sync.capture_video()
                             tw, th = vf.get_resolution()
                             if tw > 0 and th > 0 and vf.get_data_size() > 0:
-                                last_frame_data = bytes(vf)
+                                has_frame = True
                                 last_frame_w, last_frame_h = tw, th
                                 is_connected = True
                                 print(f"[RX RUNNER] First frame captured ({tw}x{th}). Connected to {current_source_name}!", flush=True)
@@ -241,7 +223,7 @@ def _rx_worker_process(command_q: mp.Queue, status_q: mp.Queue, init_options: di
                     is_connected = False
                     drop_receiver()
                     reconnect_cooldown_until = now + 1.0
-                    last_frame_data, last_frame_w, last_frame_h = None, 0, 0
+                    has_frame, last_frame_w, last_frame_h = False, 0, 0
                     last_timecode = -1.0
                     is_texture_initialized = False
 
@@ -252,19 +234,26 @@ def _rx_worker_process(command_q: mp.Queue, status_q: mp.Queue, init_options: di
                         tex_w, tex_h = vf.get_resolution()
                         curr_timecode = vf.get_timecode_posix()
                         if tex_w > 0 and tex_h > 0 and vf.get_data_size() > 0:
-                            if curr_timecode != last_timecode or last_frame_data is None:
+                            if curr_timecode != last_timecode or not has_frame:
                                 new_frame = True
                                 last_timecode = curr_timecode
-                                last_frame_data = bytes(vf)
+                                has_frame = True
                                 if last_frame_w != tex_w or last_frame_h != tex_h:
                                     is_texture_initialized = False
                                 last_frame_w, last_frame_h = tex_w, tex_h
                                 frames_rendered += 1
 
-                                is_texture_initialized = render_texture(
-                                    last_frame_data, last_frame_w, last_frame_h, win_w, win_h,
-                                    texture_id, options.recv_fmt, is_texture_initialized
-                                )
+                                # Zero-copy: upload straight from the NDI frame buffer. The view must be
+                                # released before the next capture_video(), so drop it right after use.
+                                with memoryview(vf) as mv:
+                                    frame_arr = np.frombuffer(mv, dtype=np.uint8)
+                                    try:
+                                        is_texture_initialized = render_texture(
+                                            frame_arr, last_frame_w, last_frame_h, win_w, win_h,
+                                            texture_id, options.recv_fmt, is_texture_initialized
+                                        )
+                                    finally:
+                                        del frame_arr
                                 if show_banner:
                                     render_ip_banner(overlay_tex_id, local_ip, current_source_name, win_w, win_h)
                                 sdl2.SDL_GL_SwapWindow(window)
@@ -276,7 +265,7 @@ def _rx_worker_process(command_q: mp.Queue, status_q: mp.Queue, init_options: di
                         drop_receiver()
                         is_connected = False
                         reconnect_cooldown_until = now + 1.0
-                        last_frame_data = None
+                        has_frame = False
                         last_timecode = -1.0
                         is_texture_initialized = False
                     if not new_frame:
