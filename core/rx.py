@@ -86,7 +86,7 @@ def wait_for_first_frame(receiver: Receiver) -> None:
 
 
 def render_texture(
-    frame: bytes,
+    frame,  # bytes or 1-d uint8 buffer / ndarray
     tex_w: int,
     tex_h: int,
     win_w: int,
@@ -96,7 +96,7 @@ def render_texture(
     is_texture_initialized: bool
 ) -> bool:
     """Render raw frame bytes to SDL OpenGL window with aspect ratio scaling."""
-    if not frame or tex_w == 0 or tex_h == 0:
+    if frame is None or len(frame) == 0 or tex_w == 0 or tex_h == 0:
         render_waiting_message()
         return False
 
