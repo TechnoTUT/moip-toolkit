@@ -1,9 +1,9 @@
 [Unit]
-Description=NDI Receiver (SDL2)
+Description=NDI Web GUI (FastAPI)
 After=network.target
 
 [Service]
-ExecStart=%h/utone-ndi-utils/.venv/bin/python %h/utone-ndi-utils/main.py rx -s "__SOURCE_NAME__" --fullscreen
+ExecStart=%h/utone-ndi-utils/.venv/bin/python %h/utone-ndi-utils/main.py web
 WorkingDirectory=%h/utone-ndi-utils
 Restart=always
 RestartSec=3

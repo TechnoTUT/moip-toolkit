@@ -7,6 +7,9 @@ ExecStart=%h/utone-ndi-utils/.venv/bin/python %h/utone-ndi-utils/main.py tx
 WorkingDirectory=%h/utone-ndi-utils
 Restart=always
 RestartSec=3
+# Cap memory so a runaway process is killed (and restarted) instead of taking down the OS
+MemoryHigh=1G
+MemoryMax=1500M
 
 [Install]
 WantedBy=default.target
