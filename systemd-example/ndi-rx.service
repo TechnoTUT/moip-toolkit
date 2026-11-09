@@ -4,6 +4,8 @@ After=network.target
 
 [Service]
 ExecStart=%h/utone-ndi-utils/.venv/bin/python %h/utone-ndi-utils/main.py rx -s "__SOURCE_NAME__" --fullscreen
+# Lowest latency on a dedicated display machine (no desktop session; user in `video` and `input` groups):
+#ExecStart=%h/utone-ndi-utils/.venv/bin/python %h/utone-ndi-utils/main.py rx -s "__SOURCE_NAME__" --fullscreen --video-driver kmsdrm
 WorkingDirectory=%h/utone-ndi-utils
 Restart=always
 RestartSec=3

@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 
 from cyndilib.wrapper import FourCC
 
+import os
 import socket
 import numpy as np
 import sdl2
@@ -434,10 +435,32 @@ def render_waiting_message(overlay_tex_id: Optional[int] = None, ip_str: str = "
         glEnd()
 
 
+VIDEO_DRIVERS = ("auto", "kmsdrm", "wayland", "x11")
+
+
+def apply_video_driver(name: Optional[str]) -> None:
+    """
+    Select the SDL video backend (must run before SDL_Init; inherited by child processes).
+    "kmsdrm" renders straight to the display via DRM/KMS without a desktop
+    compositor, removing the 1-2 frames of latency the compositor adds. It needs
+    no running desktop session on that display and the user in the `video` group.
+    """
+    if name and name != "auto":
+        os.environ["SDL_VIDEODRIVER"] = name
+
+
 def init_window(title: str, width: int, height: int, fullscreen: bool):
     """Initialize SDL2 OpenGL window and context."""
+    # Double instead of triple buffering where the driver supports it (KMSDRM):
+    # one less queued frame between swap and scan-out.
+    sdl2.SDL_SetHint(sdl2.SDL_HINT_VIDEO_DOUBLE_BUFFER, b"1")
     if sdl2.SDL_Init(sdl2.SDL_INIT_VIDEO) != 0:
         raise RuntimeError(f"SDL_Init Error: {sdl2.SDL_GetError()}")
+
+    driver = (sdl2.SDL_GetCurrentVideoDriver() or b"").decode().lower()
+    print(f"[SDL] video driver: {driver}", flush=True)
+    if driver == "kmsdrm":
+        fullscreen = True  # no window system: always take over the whole display
 
     sdl2.SDL_GL_SetAttribute(sdl2.SDL_GL_CONTEXT_MAJOR_VERSION, 2)
     sdl2.SDL_GL_SetAttribute(sdl2.SDL_GL_CONTEXT_MINOR_VERSION, 1)

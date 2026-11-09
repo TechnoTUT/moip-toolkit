@@ -8,6 +8,7 @@ import click
 import uvicorn
 
 from cli.rx_cmd import rx_command
+from core.rx import VIDEO_DRIVERS, apply_video_driver
 from cli.tx_cmd import tx_command
 from cli.multiview_cmd import multiview_command
 from cli.signage_cmd import signage_command
@@ -24,9 +25,13 @@ def cli():
 @click.option("-h", "--host", default="0.0.0.0", show_default=True, help="Host to bind Web server.")
 @click.option("-p", "--port", default=8000, show_default=True, help="Port to bind Web server.")
 @click.option("--reload", is_flag=True, default=False, help="Enable auto-reload for development.")
-def web_command(host: str, port: int, reload: bool):
+@click.option("--video-driver", type=click.Choice(VIDEO_DRIVERS), default="auto", show_default=True,
+              help='SDL video backend for RX/multiview windows. "kmsdrm" bypasses the desktop compositor for the lowest latency.')
+def web_command(host: str, port: int, reload: bool, video_driver: str):
     import signal
     import sys
+
+    apply_video_driver(video_driver)
 
     click.echo(f"Starting utone-ndi-utils Web API server on http://{host}:{port}")
 
