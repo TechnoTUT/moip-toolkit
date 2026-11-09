@@ -37,6 +37,7 @@ interface RxStatus {
   height: number
   fps: number
   fps_real?: number
+  latency_ms?: number | null
   dropped_frames?: number
   error: string | null
 }
@@ -160,7 +161,7 @@ const appSettings = ref<AppSettings>({
   rx: {
     auto_start: false,
     sender_name: null,
-    recv_fmt: 'rgb',
+    recv_fmt: 'uyvy',
     recv_bandwidth: 'highest',
     fullscreen: false
   },
@@ -181,7 +182,7 @@ const rxStatus = ref<RxStatus>({
   running: false,
   is_connected: false,
   current_source: null,
-  recv_fmt: 'rgb',
+  recv_fmt: 'uyvy',
   recv_bandwidth: 'highest',
   fullscreen: false,
   width: 0,
@@ -223,7 +224,7 @@ const systemStatus = ref<SystemStatus>({
 
 // Form Options
 const rxFullscreen = ref(false)
-const rxFmt = ref('rgb')
+const rxFmt = ref('uyvy')
 const rxBandwidth = ref('highest')
 const rxAutoStart = ref(false)
 
@@ -945,6 +946,12 @@ onUnmounted(() => {
                   {{ rxStatus.running && rxStatus.is_connected ? `${rxStatus.fps_real?.toFixed(1) || '0.0'} fps` : '-' }}
                 </span>
               </div>
+              <div class="flex justify-between" title="Sender timestamp to display. Accurate only when sender and receiver clocks are NTP-synced.">
+                <span class="text-slate-500 dark:text-slate-400">Latency:</span>
+                <span class="text-slate-900 dark:text-slate-100 font-mono font-medium">
+                  {{ rxStatus.running && rxStatus.is_connected && rxStatus.latency_ms != null ? `${rxStatus.latency_ms.toFixed(1)} ms` : '-' }}
+                </span>
+              </div>
 
               <!-- RX Audio Level Meter (VU Meter) -->
               <div v-if="rxStatus.running && rxStatus.is_connected" class="pt-2 border-t border-slate-100 dark:border-slate-800 space-y-2">
@@ -1031,9 +1038,9 @@ onUnmounted(() => {
               <div>
                 <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Color Format</label>
                 <select v-model="rxFmt" class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-800 dark:text-slate-200 focus:outline-none focus:border-[#C7000A]">
-                  <option value="rgb">RGB (Fast, default)</option>
+                  <option value="uyvy">UYVY (Lowest latency, default)</option>
+                  <option value="rgb">RGB</option>
                   <option value="bgr">BGR</option>
-                  <option value="uyvy">UYVY (Lowest Bandwidth)</option>
                 </select>
               </div>
 

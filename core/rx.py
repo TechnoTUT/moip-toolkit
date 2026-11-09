@@ -19,19 +19,27 @@ from core.reconnecting_receiver import ReconnectingReceiver
 if TYPE_CHECKING:
     from cyndilib.finder import Source
 
+from cyndilib.wrapper import FourCC
+
 import socket
+import numpy as np
 import sdl2
 import sdl2.ext
 try:
     from OpenGL.GL import (
         GL_TEXTURE_2D, GL_PROJECTION, GL_MODELVIEW, GL_COLOR_BUFFER_BIT,
-        GL_RGBA, GL_BGRA, GL_UNSIGNED_BYTE, GL_QUADS, GL_LINEAR, GL_NEAREST,
-        GL_TEXTURE_MAG_FILTER, GL_TEXTURE_MIN_FILTER,
+        GL_RGBA, GL_RGBA8, GL_BGRA, GL_UNSIGNED_BYTE, GL_QUADS, GL_LINEAR, GL_NEAREST,
+        GL_TEXTURE_MAG_FILTER, GL_TEXTURE_MIN_FILTER, GL_TEXTURE_WRAP_S, GL_TEXTURE_WRAP_T,
+        GL_CLAMP_TO_EDGE, GL_UNPACK_ROW_LENGTH, GL_UNPACK_ALIGNMENT,
+        GL_VERTEX_SHADER, GL_FRAGMENT_SHADER,
         glEnable, glViewport, glMatrixMode, glLoadIdentity, glOrtho,
         glGenTextures, glBindTexture, glTexImage2D, glTexParameteri,
         glTexSubImage2D, glClearColor, glClear, glBegin, glTexCoord2f,
-        glVertex2f, glEnd, glDeleteTextures
+        glVertex2f, glEnd, glDeleteTextures, glPixelStorei,
+        glUseProgram, glGetUniformLocation, glUniform1i, glUniform2f, glUniform4f,
+        glDeleteProgram,
     )
+    from OpenGL.GL.shaders import compileProgram, compileShader
 except Exception:
     pass
 
@@ -57,7 +65,7 @@ class Bandwidth(enum.Enum):
 
 class Options(NamedTuple):
     sender_name: str
-    recv_fmt: RecvFmt = RecvFmt.rgb
+    recv_fmt: RecvFmt = RecvFmt.uyvy
     recv_bandwidth: Bandwidth = Bandwidth.highest
     fullscreen: bool = False
 
@@ -86,43 +94,182 @@ def wait_for_first_frame(receiver: Receiver) -> None:
         time.sleep(0.01)
 
 
-def render_texture(
-    frame,  # bytes or 1-d uint8 buffer / ndarray
-    tex_w: int,
-    tex_h: int,
-    win_w: int,
-    win_h: int,
-    texture_id: int,
-    recv_fmt: RecvFmt,
-    is_texture_initialized: bool
-) -> bool:
-    """Render raw frame bytes to SDL OpenGL window with aspect ratio scaling."""
-    if frame is None or len(frame) == 0 or tex_w == 0 or tex_h == 0:
-        render_waiting_message()
-        return False
+_UYVY_VERT = """
+#version 110
+varying vec2 v_tc;
+void main() {
+    v_tc = gl_MultiTexCoord0.xy;
+    gl_Position = ftransform();
+}
+"""
 
-    gl_format = GL_BGRA if recv_fmt == RecvFmt.bgr else GL_RGBA
-    glBindTexture(GL_TEXTURE_2D, texture_id)
-    
-    if not is_texture_initialized:
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, tex_w, tex_h, 0, gl_format, GL_UNSIGNED_BYTE, frame)
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-    else:
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, tex_w, tex_h, gl_format, GL_UNSIGNED_BYTE, frame)
+# UYVY 4:2:2 is uploaded as an RGBA texture of half width: each texel is one
+# macropixel (r=U, g=Y0, b=V, a=Y1). The texture uses GL_NEAREST and bilinear
+# filtering is done here per luma pixel, so scaling stays smooth without
+# mixing Y0/Y1 of neighbouring macropixels.
+_UYVY_FRAG = """
+#version 110
+uniform sampler2D tex;
+uniform vec2 size;   // frame size in luma pixels
+uniform vec4 coef;   // (Rv, Gu, Gv, Bu) of the YCbCr -> RGB matrix
+varying vec2 v_tc;
 
-    glClearColor(0.0, 0.0, 0.0, 1.0)
-    glClear(GL_COLOR_BUFFER_BIT)
+vec3 yuv_at(vec2 px) {
+    float mx = floor(px.x * 0.5);
+    vec4 t = texture2D(tex, vec2((mx + 0.5) / (size.x * 0.5), (px.y + 0.5) / size.y));
+    float luma = (px.x - mx * 2.0 < 0.5) ? t.g : t.a;
+    return vec3(luma, t.r, t.b);
+}
 
-    src_ratio = tex_w / tex_h
-    dst_ratio = win_w / win_h
+void main() {
+    vec2 p = v_tc * size - 0.5;
+    vec2 i = floor(p);
+    vec2 f = p - i;
+    vec2 lo = clamp(i, vec2(0.0), size - 1.0);
+    vec2 hi = clamp(i + 1.0, vec2(0.0), size - 1.0);
+    vec3 c = mix(mix(yuv_at(lo), yuv_at(vec2(hi.x, lo.y)), f.x),
+                 mix(yuv_at(vec2(lo.x, hi.y)), yuv_at(hi), f.x), f.y);
+    float y = (c.x - 0.0627451) * 1.1643836;  // limited range 16..235
+    float u = c.y - 0.5;
+    float v = c.z - 0.5;
+    gl_FragColor = vec4(y + coef.x * v, y - coef.y * u - coef.z * v, y + coef.w * u, 1.0);
+}
+"""
 
+# NDI uses BT.709 for HD and BT.601 for SD (< 720 lines).
+_COEF_BT709 = (1.7927411, 0.2132486, 0.5329093, 2.1124018)
+_COEF_BT601 = (1.5960268, 0.3917623, 0.8129676, 2.0172321)
+
+
+
+def _rgb_gl_format(fourcc) -> Optional[int]:
+    if fourcc in (FourCC.RGBA, FourCC.RGBX):
+        return GL_RGBA
+    if fourcc in (FourCC.BGRA, FourCC.BGRX):
+        return GL_BGRA
+    return None
+
+
+class FrameRenderer:
+    """
+    Uploads NDI video frames to a GL texture and draws them letterboxed.
+
+    UYVY frames are uploaded as-is (2 bytes/pixel) and converted to RGB on the
+    GPU, which halves the upload size and skips the CPU-side colour conversion
+    the NDI SDK otherwise performs for RGBX/BGRX. RGBA/BGRA frames (e.g. sources
+    with alpha when receiving with UYVY_RGBA) are uploaded directly.
+    Requires a current GL context.
+    """
+
+    def __init__(self):
+        self.texture_id = glGenTextures(1)
+        self._tex_key = None  # (tex_w, tex_h, gl_format, filter)
+        self._program = None
+        self._loc_size = self._loc_coef = -1
+        try:
+            self._program = compileProgram(
+                compileShader(_UYVY_VERT, GL_VERTEX_SHADER),
+                compileShader(_UYVY_FRAG, GL_FRAGMENT_SHADER),
+            )
+            glUseProgram(self._program)
+            glUniform1i(glGetUniformLocation(self._program, "tex"), 0)
+            self._loc_size = glGetUniformLocation(self._program, "size")
+            self._loc_coef = glGetUniformLocation(self._program, "coef")
+            glUseProgram(0)
+        except Exception as e:
+            print(f"[RX] UYVY shader unavailable, falling back to RGB receive: {e}", flush=True)
+            self._program = None
+
+    @property
+    def supports_uyvy(self) -> bool:
+        return self._program is not None
+
+    def resolve_recv_fmt(self, recv_fmt: RecvFmt) -> RecvFmt:
+        """Return a receive format this renderer can display."""
+        if recv_fmt == RecvFmt.uyvy and not self.supports_uyvy:
+            return RecvFmt.rgb
+        return recv_fmt
+
+    def reset(self) -> None:
+        """Force texture re-allocation on the next frame."""
+        self._tex_key = None
+
+    def draw(self, vf, win_w: int, win_h: int) -> bool:
+        """Upload the current frame of `vf` and draw it. Returns False if nothing was drawn."""
+        xres, yres = vf.get_resolution()
+        if xres <= 0 or yres <= 0 or vf.get_data_size() <= 0:
+            return False
+
+        fourcc = vf.get_fourcc()
+        stride = vf.get_line_stride() or 0
+        if fourcc == FourCC.UYVY:
+            if self._program is None:
+                return False
+            tex_w, gl_format, filt = xres // 2, GL_RGBA, GL_NEAREST
+        else:
+            gl_format = _rgb_gl_format(fourcc)
+            if gl_format is None:
+                return False
+            tex_w, filt = xres, GL_LINEAR
+        row_len = stride // 4 if stride else tex_w
+
+        with memoryview(vf) as mv:
+            frame = np.frombuffer(mv, dtype=np.uint8)
+            try:
+                if frame.size < row_len * 4 * (yres - 1) + tex_w * 4:
+                    return False
+                glBindTexture(GL_TEXTURE_2D, self.texture_id)
+                glPixelStorei(GL_UNPACK_ALIGNMENT, 4)
+                glPixelStorei(GL_UNPACK_ROW_LENGTH, row_len if row_len != tex_w else 0)
+                key = (tex_w, yres, gl_format, filt)
+                if key != self._tex_key:
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filt)
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filt)
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
+                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, tex_w, yres, 0, gl_format, GL_UNSIGNED_BYTE, frame)
+                    self._tex_key = key
+                else:
+                    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, tex_w, yres, gl_format, GL_UNSIGNED_BYTE, frame)
+                glPixelStorei(GL_UNPACK_ROW_LENGTH, 0)
+            finally:
+                del frame
+
+        glClearColor(0.0, 0.0, 0.0, 1.0)
+        glClear(GL_COLOR_BUFFER_BIT)
+
+        use_shader = fourcc == FourCC.UYVY
+        if use_shader:
+            glUseProgram(self._program)
+            glUniform2f(self._loc_size, float(xres), float(yres))
+            glUniform4f(self._loc_coef, *(_COEF_BT601 if yres < 720 else _COEF_BT709))
+        try:
+            _draw_letterboxed_quad(xres, yres, win_w, win_h)
+        finally:
+            if use_shader:
+                glUseProgram(0)
+        return True
+
+    def delete(self) -> None:
+        try:
+            glDeleteTextures(1, [self.texture_id])
+        except Exception:
+            pass
+        if self._program is not None:
+            try:
+                glDeleteProgram(self._program)
+            except Exception:
+                pass
+            self._program = None
+
+
+def _draw_letterboxed_quad(src_w: int, src_h: int, win_w: int, win_h: int) -> None:
+    src_ratio = src_w / src_h
+    dst_ratio = win_w / max(win_h, 1)
     if src_ratio > dst_ratio:
-        scale_x = 1.0
-        scale_y = dst_ratio / src_ratio
+        scale_x, scale_y = 1.0, dst_ratio / src_ratio
     else:
-        scale_x = src_ratio / dst_ratio
-        scale_y = 1.0
+        scale_x, scale_y = src_ratio / dst_ratio, 1.0
 
     glBegin(GL_QUADS)
     glTexCoord2f(0.0, 1.0); glVertex2f(-scale_x, -scale_y)
@@ -130,8 +277,6 @@ def render_texture(
     glTexCoord2f(1.0, 0.0); glVertex2f( scale_x,  scale_y)
     glTexCoord2f(0.0, 0.0); glVertex2f(-scale_x,  scale_y)
     glEnd()
-    
-    return True
 
 
 def get_local_ip() -> str:
@@ -318,6 +463,24 @@ def init_window(title: str, width: int, height: int, fullscreen: bool):
     return window
 
 
+def frame_id(vf) -> tuple[float, float]:
+    """Identity of the frame currently held by a VideoFrameSync (framesync repeats frames)."""
+    return (vf.get_timecode_posix(), vf.get_timestamp_posix())
+
+
+def frame_latency_ms(vf) -> Optional[float]:
+    """Sender timestamp -> now, in ms. Only meaningful when sender/receiver clocks are synced."""
+    ts = vf.get_timestamp_posix()
+    if ts <= 0:
+        return None
+    return (time.time() - ts) * 1000.0
+
+
+# Poll interval while waiting for the next frame. Short enough that the added
+# delay between frame arrival and display is ~0.5ms on average.
+FRAME_POLL_INTERVAL = 0.001
+
+
 def play_sdl(options: Options, finder: Finder, log_fn=print):
     """Main SDL2 playback loop for CLI receiver."""
     window = init_window("NDI Viewer", 1280, 720, options.fullscreen)
@@ -334,21 +497,21 @@ def play_sdl(options: Options, finder: Finder, log_fn=print):
     glMatrixMode(GL_MODELVIEW)
     glLoadIdentity()
     
-    texture_id = glGenTextures(1)
+    renderer = FrameRenderer()
     overlay_tex_id = glGenTextures(1)
+    recv_fmt = renderer.resolve_recv_fmt(options.recv_fmt)
     receiver: Optional[Receiver] = None
     running = True
     event = sdl2.SDL_Event()
     
     is_connected = False
-    last_frame_w, last_frame_h = 0, 0
-    is_texture_initialized = False
+    last_frame_id = None
     start_time = time.time()
     local_ip = get_local_ip()
 
     vf = VideoFrameSync()
     rr = ReconnectingReceiver(
-        options.recv_fmt.value,
+        recv_fmt.value,
         options.recv_bandwidth.value,
         vf,
         connect_timeout=5.0,
@@ -371,12 +534,14 @@ def play_sdl(options: Options, finder: Finder, log_fn=print):
                 elif event.type == sdl2.SDL_WINDOWEVENT and event.window.event == sdl2.SDL_WINDOWEVENT_RESIZED:
                     win_w, win_h = event.window.data1, event.window.data2
                     glViewport(0, 0, win_w, win_h)
+                    last_frame_id = None  # redraw at the new size
 
             now = time.time()
             show_banner = (now - start_time < 30.0)
 
             if not rr.update(find_source, now):
                 is_connected = False
+                last_frame_id = None
                 render_waiting_message(overlay_tex_id, local_ip, options.sender_name, win_w, win_h)
                 sdl2.SDL_GL_SwapWindow(window)
                 time.sleep(0.016)
@@ -387,39 +552,32 @@ def play_sdl(options: Options, finder: Finder, log_fn=print):
                 is_connected = True
                 log_fn(f"Connected to NDI source: {options.sender_name}")
 
+            drawn = False
             try:
                 receiver.frame_sync.capture_video()
-                tex_w, tex_h = vf.get_resolution()
-                if tex_w > 0 and tex_h > 0 and vf.get_data_size() > 0:
-                    if last_frame_w != tex_w or last_frame_h != tex_h:
-                        is_texture_initialized = False
-                    last_frame_w, last_frame_h = tex_w, tex_h
-
-                    with memoryview(vf) as mv:
-                        frame_arr = np.frombuffer(mv, dtype=np.uint8)
-                        try:
-                            is_texture_initialized = render_texture(
-                                frame_arr, last_frame_w, last_frame_h, win_w, win_h,
-                                texture_id, options.recv_fmt, is_texture_initialized
-                            )
-                        finally:
-                            del frame_arr
-
+                fid = frame_id(vf)
+                if fid != last_frame_id and renderer.draw(vf, win_w, win_h):
+                    last_frame_id = fid
                     if show_banner:
                         render_ip_banner(overlay_tex_id, local_ip, options.sender_name, win_w, win_h)
+                    sdl2.SDL_GL_SwapWindow(window)
+                    drawn = True
             except Exception as e:
                 log_fn(f"Error during frame capture or rendering: {e}")
                 rr.drop(now, cooldown=2.0)
                 is_connected = False
-                is_texture_initialized = False
+                last_frame_id = None
+                renderer.reset()
 
-            sdl2.SDL_GL_SwapWindow(window)
+            if not drawn:
+                time.sleep(FRAME_POLL_INTERVAL)
 
     finally:
         log_fn("Cleaning up resources...")
         rr.drop()
         receiver = None
-        glDeleteTextures(2, [texture_id, overlay_tex_id])
+        renderer.delete()
+        glDeleteTextures(1, [overlay_tex_id])
         sdl2.SDL_DestroyWindow(window)
         sdl2.SDL_Quit()
         log_fn("Program terminated.")
