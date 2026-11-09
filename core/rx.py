@@ -105,9 +105,11 @@ void main() {
 """
 
 # UYVY 4:2:2 is uploaded as an RGBA texture of half width: each texel is one
-# macropixel (r=U, g=Y0, b=V, a=Y1). The texture uses GL_NEAREST and bilinear
-# filtering is done here per luma pixel, so scaling stays smooth without
-# mixing Y0/Y1 of neighbouring macropixels.
+# macropixel (r=U, g=Y0, b=V, a=Y1). The texture is sampled with GL_LINEAR
+# exactly at macropixel centres horizontally, so the hardware only interpolates
+# vertically; horizontal interpolation is done here per luma pixel. That keeps
+# scaling smooth with two texture fetches per pixel, without mixing Y0/Y1 of
+# neighbouring macropixels.
 _UYVY_FRAG = """
 #version 110
 uniform sampler2D tex;
@@ -115,25 +117,22 @@ uniform vec2 size;   // frame size in luma pixels
 uniform vec4 coef;   // (Rv, Gu, Gv, Bu) of the YCbCr -> RGB matrix
 varying vec2 v_tc;
 
-vec3 yuv_at(vec2 px) {
-    float mx = floor(px.x * 0.5);
-    vec4 t = texture2D(tex, vec2((mx + 0.5) / (size.x * 0.5), (px.y + 0.5) / size.y));
-    float luma = (px.x - mx * 2.0 < 0.5) ? t.g : t.a;
-    return vec3(luma, t.r, t.b);
-}
-
 void main() {
-    vec2 p = v_tc * size - 0.5;
-    vec2 i = floor(p);
-    vec2 f = p - i;
-    vec2 lo = clamp(i, vec2(0.0), size - 1.0);
-    vec2 hi = clamp(i + 1.0, vec2(0.0), size - 1.0);
-    vec3 c = mix(mix(yuv_at(lo), yuv_at(vec2(hi.x, lo.y)), f.x),
-                 mix(yuv_at(vec2(lo.x, hi.y)), yuv_at(hi), f.x), f.y);
-    float y = (c.x - 0.0627451) * 1.1643836;  // limited range 16..235
-    float u = c.y - 0.5;
-    float v = c.z - 0.5;
-    gl_FragColor = vec4(y + coef.x * v, y - coef.y * u - coef.z * v, y + coef.w * u, 1.0);
+    float half_w = size.x * 0.5;
+    float p = v_tc.x * size.x - 0.5;
+    float i = floor(p);
+    float f = p - i;
+    float x0 = clamp(i, 0.0, size.x - 1.0);
+    float x1 = clamp(i + 1.0, 0.0, size.x - 1.0);
+    float m0 = floor(x0 * 0.5);
+    float m1 = floor(x1 * 0.5);
+    vec4 t0 = texture2D(tex, vec2((m0 + 0.5) / half_w, v_tc.y));
+    vec4 t1 = texture2D(tex, vec2((m1 + 0.5) / half_w, v_tc.y));
+    float y0 = mix(t0.g, t0.a, x0 - m0 * 2.0);  // odd pixel -> Y1
+    float y1 = mix(t1.g, t1.a, x1 - m1 * 2.0);
+    float y = (mix(y0, y1, f) - 0.0627451) * 1.1643836;  // limited range 16..235
+    vec2 uv = mix(t0.rb, t1.rb, f) - 0.5;
+    gl_FragColor = vec4(y + coef.x * uv.y, y - coef.y * uv.x - coef.z * uv.y, y + coef.w * uv.x, 1.0);
 }
 """
 
@@ -206,7 +205,7 @@ class FrameRenderer:
         if fourcc == FourCC.UYVY:
             if self._program is None:
                 return False
-            tex_w, gl_format, filt = xres // 2, GL_RGBA, GL_NEAREST
+            tex_w, gl_format, filt = xres // 2, GL_RGBA, GL_LINEAR
         else:
             gl_format = _rgb_gl_format(fourcc)
             if gl_format is None:
