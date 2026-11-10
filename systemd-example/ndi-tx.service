@@ -3,8 +3,8 @@ Description=NDI Sender
 After=network.target
 
 [Service]
-ExecStart=%h/utone-ndi-utils/.venv/bin/python %h/utone-ndi-utils/main.py tx
-WorkingDirectory=%h/utone-ndi-utils
+ExecStart=%h/moip-toolkit/.venv/bin/python %h/moip-toolkit/main.py tx
+WorkingDirectory=%h/moip-toolkit
 Restart=always
 RestartSec=3
 # Cap memory so a runaway process is killed (and restarted) instead of taking down the OS
