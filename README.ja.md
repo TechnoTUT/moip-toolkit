@@ -28,7 +28,7 @@ $ uv pip install -r requirements.txt
 
 ## 起動コマンド
 
-統合CLI `main.py` から `rx` / `tx` / `web` の各機能を統一的に実行できます。
+統合CLI `main.py` から `rx` / `tx` / `multiview` / `signage` / `web` の各機能を統一的に実行できます。
 
 ### 1. Web API / ブラウザUI
 フロントエンドをビルドすることで、ブラウザからNDIソース探索、受信（RX）切り替え、送信（TX）開始・停止を直感的に操作できます。
@@ -92,7 +92,15 @@ $ uv run main.py tx
 $ uv run main.py tx --list-devices
 ```
 
-### 4. デジタルサイネージ (Signage)
+### 4. マルチビューア (Multiview)
+複数のNDIソースを自動レイアウトのグリッドで同時に監視できます。
+```bash
+$ uv run main.py multiview --fullscreen
+$ uv run main.py multiview -s CAM1 -s CAM2   # 指定したソースのみ
+```
+`-s` を省略した場合は、検出されたすべてのソースを表示します。
+
+### 5. デジタルサイネージ (Signage)
 Web UI から画像をアップロードし、接続されたディスプレイに直接全画面表示できます。  
 CLIから直接画像ファイルを指定して全画面表示することも可能です:
 ```bash
@@ -115,6 +123,7 @@ $ uv run main.py signage -i /path/to/image.png --framebuffer
 moip-toolkit/
 ├── core/                   # 低レベル共通コアロジック
 │   ├── rx.py               # SDL2初期化、OpenGL描画、フレーム同期、NDI受信定義
+│   ├── reconnecting_receiver.py # 再接続・停止復旧つきNDIレシーバー
 │   ├── tx.py               # カメラ取得スレッド、映像/音声NDI送信スレッド
 │   ├── multiview.py        # 複数NDIグリッド表示ロジック
 │   └── signage.py          # SDL2/OpenGLまたはLinuxフレームバッファによる画像サイネージ描画
@@ -133,6 +142,9 @@ moip-toolkit/
 │   ├── multiview_runner.py # マルチビュープロセスコントローラー
 │   ├── signage_runner.py   # サイネージプロセスコントローラー
 │   ├── webrtc_manager.py   # WebRTC低遅延プレビューマネージャー
+│   ├── preview_manager.py  # オンデマンドMJPEGプレビュー配信
+│   ├── settings.py         # サーバー設定の永続化 (JSON)
+│   ├── system_monitor.py   # 軽量システムリソースモニター
 │   └── main.py             # REST APIエンドポイント
 ├── data/
 │   └── signage/            # アップロードされたサイネージ画像保存先
@@ -146,7 +158,8 @@ moip-toolkit/
 
 ## 自動起動設定 (systemd)
 Systemdを使用して自動起動する場合は、以下の手順を実行します。GUIなしの環境でも動作します。  
-`ExecStart` と `WorkingDirectory` のパスを環境に合わせて設定してください。
+`ExecStart` と `WorkingDirectory` のパスを環境に合わせて設定してください。  
+TX用 (`ndi-tx.service`) とWeb UI用 (`ndi-web.service`) のユニットファイルも `systemd-example/` に用意しています。
 ```bash
 $ mkdir -p ~/.config/systemd/user
 $ cp systemd-example/ndi-rx.service ~/.config/systemd/user/

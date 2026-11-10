@@ -28,7 +28,7 @@ $ uv pip install -r requirements.txt
 
 ## Commands
 
-The unified CLI `main.py` runs the `rx` / `tx` / `web` features from a single entry point.
+The unified CLI `main.py` runs the `rx` / `tx` / `multiview` / `signage` / `web` features from a single entry point.
 
 ### 1. Web API / Browser UI
 Once the frontend is built, you can discover NDI sources, switch the receiver (RX), and start/stop the transmitter (TX) from your browser.
@@ -93,7 +93,15 @@ List the connected camera and microphone devices:
 $ uv run main.py tx --list-devices
 ```
 
-### 4. Digital Signage
+### 4. Multi-viewer (Multiview)
+Monitor multiple NDI sources at once in an auto-arranged grid.
+```bash
+$ uv run main.py multiview --fullscreen
+$ uv run main.py multiview -s CAM1 -s CAM2   # Only the specified sources
+```
+If `-s` is omitted, all discovered sources are shown.
+
+### 5. Digital Signage
 Upload an image from the Web UI and show it fullscreen directly on a connected display.  
 You can also specify an image file from the CLI and show it fullscreen:
 ```bash
@@ -116,6 +124,7 @@ $ uv run main.py signage -i /path/to/image.png --framebuffer
 moip-toolkit/
 ├── core/                   # Low-level shared core logic
 │   ├── rx.py               # SDL2 init, OpenGL rendering, frame sync, NDI receive definitions
+│   ├── reconnecting_receiver.py # NDI receiver with reconnect / stall-recovery handling
 │   ├── tx.py               # Camera capture thread, video/audio NDI send threads
 │   ├── multiview.py        # Multi-NDI grid display logic
 │   └── signage.py          # Image signage rendering via SDL2/OpenGL or the Linux framebuffer
@@ -134,6 +143,9 @@ moip-toolkit/
 │   ├── multiview_runner.py # Multiview process controller
 │   ├── signage_runner.py   # Signage process controller
 │   ├── webrtc_manager.py   # Low-latency WebRTC preview manager
+│   ├── preview_manager.py  # On-demand MJPEG preview streamer
+│   ├── settings.py         # Persistent server settings (JSON)
+│   ├── system_monitor.py   # Lightweight system resource monitor
 │   └── main.py             # REST API endpoints
 ├── data/
 │   └── signage/            # Storage for uploaded signage images
@@ -147,7 +159,8 @@ moip-toolkit/
 
 ## Autostart (systemd)
 To start automatically with systemd, follow the steps below. This also works on environments without a GUI.  
-Set the `ExecStart` and `WorkingDirectory` paths to match your environment.
+Set the `ExecStart` and `WorkingDirectory` paths to match your environment.  
+Unit files for TX (`ndi-tx.service`) and the Web UI (`ndi-web.service`) are also provided in `systemd-example/`.
 ```bash
 $ mkdir -p ~/.config/systemd/user
 $ cp systemd-example/ndi-rx.service ~/.config/systemd/user/
