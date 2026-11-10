@@ -46,6 +46,9 @@ MAX_BURIED = 4
 MAX_STALL_INTERVAL = 30.0
 # drop() buries instead of disconnecting a connected receiver that has been silent this long.
 SILENT_DROP_S = 0.5
+# How often buried receivers are checked for revival. A revived one decodes the stream nobody
+# reads, and its memory use climbs quickly (hundreds of MB/s observed), so reap it promptly.
+REAP_INTERVAL = 0.1
 
 
 class ReconnectingReceiver:
@@ -149,7 +152,7 @@ class ReconnectingReceiver:
         mono = time.monotonic()
         if mono < self._next_reap:
             return
-        self._next_reap = mono + 1.0
+        self._next_reap = mono + REAP_INTERVAL
         keep, reaped = [], 0
         for rx, total in self._buried:
             try:
