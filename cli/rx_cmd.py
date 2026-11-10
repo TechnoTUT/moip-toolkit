@@ -5,16 +5,19 @@ CLI command definition for NDI receiver (Viewer).
 from __future__ import annotations
 import click
 from cyndilib.finder import Finder
-from core.rx import RecvFmt, Bandwidth, Options, play_sdl
+from core.rx import RecvFmt, Bandwidth, Options, play_sdl, VIDEO_DRIVERS, apply_video_driver
 from cli.menu import select_ndi_source_interactive
 
 
 @click.command(name="rx", help="Start NDI Viewer to receive and display video via SDL2.")
 @click.option('-s', '--sender-name', type=str, default=None, help='NDI source name to connect to. If omitted, an interactive menu will be shown.')
-@click.option('-f', '--recv-fmt', type=click.Choice(choices=[m.name for m in RecvFmt]), default='rgb', show_default=True, help='Pixel format for receiving')
+@click.option('-f', '--recv-fmt', type=click.Choice(choices=[m.name for m in RecvFmt]), default='uyvy', show_default=True, help='Pixel format for receiving (uyvy is converted on the GPU: lowest latency)')
 @click.option('-b', '--recv-bandwidth', type=click.Choice(choices=[m.name for m in Bandwidth]), default='highest', show_default=True, help='Receiving bandwidth')
 @click.option('--fullscreen', is_flag=True, help='Start in fullscreen mode')
-def rx_command(sender_name: str | None, recv_fmt: str, recv_bandwidth: str, fullscreen: bool):
+@click.option('--video-driver', type=click.Choice(VIDEO_DRIVERS), default='auto', show_default=True,
+              help='SDL video backend. "kmsdrm" bypasses the desktop compositor for the lowest latency (no desktop session on that display).')
+def rx_command(sender_name: str | None, recv_fmt: str, recv_bandwidth: str, fullscreen: bool, video_driver: str):
+    apply_video_driver(video_driver)
     finder = Finder()
     try:
         if not sender_name:

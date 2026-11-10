@@ -22,12 +22,9 @@ class RxWorker:
         import sdl2
         import sdl2.ext
         from OpenGL.GL import (
-            GL_TEXTURE_2D, GL_PROJECTION, GL_MODELVIEW, GL_COLOR_BUFFER_BIT,
-            GL_RGBA, GL_BGRA, GL_UNSIGNED_BYTE, GL_QUADS, GL_LINEAR,
+            GL_TEXTURE_2D, GL_PROJECTION, GL_MODELVIEW,
             glEnable, glViewport, glMatrixMode, glLoadIdentity, glOrtho,
-            glGenTextures, glBindTexture, glTexImage2D, glTexParameteri,
-            glTexSubImage2D, glClearColor, glClear, glBegin, glTexCoord2f,
-            glVertex2f, glEnd, glDeleteTextures
+            glGenTextures, glDeleteTextures
         )
         from cyndilib.receiver import Receiver
         from cyndilib.video_frame import VideoFrameSync
@@ -38,14 +35,18 @@ class RxWorker:
         from cyndilib.finder import Finder
         from core.reconnecting_receiver import ReconnectingReceiver
         from core.rx import (
-            RecvFmt, Bandwidth, Options, render_texture, render_waiting_message,
-            render_ip_banner, get_local_ip, init_window
+            RecvFmt, Bandwidth, Options, FrameRenderer, render_waiting_message,
+            render_ip_banner, get_local_ip, init_window, frame_id, frame_latency_ms,
+            FRAME_POLL_INTERVAL,
+            STALL_TIMEOUT,
         )
         import numpy as np
 
         self.sdl2 = sdl2
         self.glDeleteTextures = glDeleteTextures
-        self.render_texture = render_texture
+        self.frame_id = frame_id
+        self.frame_latency_ms = frame_latency_ms
+        self.frame_poll_interval = FRAME_POLL_INTERVAL
         self.render_waiting_message = render_waiting_message
         self.render_ip_banner = render_ip_banner
         self.np = np
@@ -58,22 +59,31 @@ class RxWorker:
 
         self.options = Options(
             sender_name=init_options["sender_name"],
-            recv_fmt=RecvFmt.from_str(init_options.get("recv_fmt", "rgb")),
+            recv_fmt=RecvFmt.from_str(init_options.get("recv_fmt", "uyvy")),
             recv_bandwidth=Bandwidth.from_str(init_options.get("recv_bandwidth", "highest")),
             fullscreen=init_options.get("fullscreen", False),
         )
 
         self.window = None
-        self.texture_id = None
+        self.renderer = None
         self.overlay_tex_id = None
         self.win_w = 1280
         self.win_h = 720
 
-        self.vf = VideoFrameSync()
-        self.af = AudioFrameSync() if AudioFrameSync is not None else None
+        # GL must be up before the receiver is created: the colour format
+        # depends on whether the GPU UYVY shader could be compiled.
+        self._init_gl(init_window, glEnable, glViewport, glMatrixMode, glLoadIdentity, glOrtho, glGenTextures, GL_TEXTURE_2D, GL_PROJECTION, GL_MODELVIEW)
+        self.renderer = FrameRenderer()
+        recv_fmt = self.renderer.resolve_recv_fmt(self.options.recv_fmt)
+
+        # Frame objects are owned by the ReconnectingReceiver (it swaps them when it
+        # replaces a stalled receiver): always access them via self.vf / self.af.
         self.rr = ReconnectingReceiver(
-            self.options.recv_fmt.value, self.options.recv_bandwidth.value, self.vf, self.af,
+            recv_fmt.value, self.options.recv_bandwidth.value, VideoFrameSync(),
+            AudioFrameSync() if AudioFrameSync is not None else None,
             connect_timeout=10.0,
+            stall_timeout=STALL_TIMEOUT,
+            log=lambda msg: print(msg, flush=True),
         )
         self.receiver = None
 
@@ -86,8 +96,8 @@ class RxWorker:
         self.has_frame = False
         self.last_frame_w = 0
         self.last_frame_h = 0
-        self.last_timecode = -1.0
-        self.is_texture_initialized = False
+        self.last_frame_id = None
+        self.last_latency_ms = None
         self.last_status_report = 0.0
         self.last_audio_calc_time = 0.0
         self.frames_rendered = 0
@@ -95,8 +105,6 @@ class RxWorker:
         self.last_audio_peaks = [-60.0, -60.0]
         self.start_time = time.time()
         self.local_ip = get_local_ip()
-
-        self._init_gl(init_window, glEnable, glViewport, glMatrixMode, glLoadIdentity, glOrtho, glGenTextures, GL_TEXTURE_2D, GL_PROJECTION, GL_MODELVIEW)
 
     def _init_gl(self, init_window, glEnable, glViewport, glMatrixMode, glLoadIdentity, glOrtho, glGenTextures, GL_TEXTURE_2D, GL_PROJECTION, GL_MODELVIEW):
         self.window = init_window("NDI Viewer", 1280, 720, self.options.fullscreen)
@@ -112,7 +120,6 @@ class RxWorker:
         glMatrixMode(GL_MODELVIEW)
         glLoadIdentity()
 
-        self.texture_id = glGenTextures(1)
         self.overlay_tex_id = glGenTextures(1)
 
     def drop_receiver(self):
@@ -134,7 +141,8 @@ class RxWorker:
                         self.drop_receiver()
                         self.is_connected = False
                         self.reconnect_cooldown_until = 0.0
-                        self.is_texture_initialized = False
+                        self.renderer.reset()
+                        self.last_frame_id = None
                         self.has_frame = False
                         self.start_time = time.time()
                 elif action == "toggle_fullscreen":
@@ -157,31 +165,48 @@ class RxWorker:
                 self.win_w, self.win_h = event.window.data1, event.window.data2
                 from OpenGL.GL import glViewport
                 glViewport(0, 0, self.win_w, self.win_h)
+                self.last_frame_id = None  # redraw at the new size
+
+    @property
+    def vf(self):
+        return self.rr.video_frame
+
+    @property
+    def af(self):
+        return self.rr.audio_frame
+
+    def _matches(self, s) -> bool:
+        # A source that went offline stays listed as invalid and its stream_name raises
+        # RuntimeError, which used to abort every lookup until the finder dropped it.
+        try:
+            if not getattr(s, "valid", True):
+                return False
+            s_name = getattr(s, "name", "") or ""
+            s_stream = getattr(s, "stream_name", "") or ""
+        except Exception:
+            return False
+        name = self.current_source_name
+        return (
+            s_name == name
+            or s_stream == name
+            or name in s_name
+            or bool(s_stream and s_stream in name)
+        )
+
+    def _find_source(self):
+        """Non-blocking lookup of the current source in the finder's list."""
+        try:
+            self.finder.wait_for_sources(0)
+        except Exception:
+            pass
+        return next((s for s in list(self.finder) if self._matches(s)), None)
 
     def update_connection(self, now: float):
         self.render_waiting_message(self.overlay_tex_id, self.local_ip, self.current_source_name, self.win_w, self.win_h)
         if self.receiver is None:
             if now >= self.reconnect_cooldown_until:
                 try:
-                    try:
-                        self.finder.wait_for_sources(0)
-                    except Exception:
-                        pass
-
-                    matched = None
-                    available = list(self.finder)
-                    for s in available:
-                        s_name = getattr(s, "name", "")
-                        s_stream = getattr(s, "stream_name", "")
-                        if (
-                            s_name == self.current_source_name
-                            or s_stream == self.current_source_name
-                            or self.current_source_name in s_name
-                            or (s_stream and s_stream in self.current_source_name)
-                        ):
-                            matched = s
-                            break
-
+                    matched = self._find_source()
                     if matched is not None:
                         self.receiver = self.rr.attach(matched, now)
                         self.connect_timeout_until = now + 10.0
@@ -215,6 +240,9 @@ class RxWorker:
         time.sleep(0.016)
 
     def render_active_frame(self, now: float, show_banner: bool):
+        if self.rr.check_stall(now, self._find_source):
+            # Fresh receiver; the last image stays on screen until its first frame.
+            self.receiver = self.rr.receiver
         if self.receiver.is_connected():
             self.last_connected_time = now
         elif now - self.last_connected_time > 4.0:
@@ -223,34 +251,25 @@ class RxWorker:
             self.drop_receiver()
             self.reconnect_cooldown_until = now + 1.0
             self.has_frame, self.last_frame_w, self.last_frame_h = False, 0, 0
-            self.last_timecode = -1.0
-            self.is_texture_initialized = False
+            self.last_frame_id = None
+            self.renderer.reset()
 
         if self.receiver is not None:
             new_frame = False
             try:
                 self.receiver.frame_sync.capture_video()
-                tex_w, tex_h = self.vf.get_resolution()
-                curr_timecode = self.vf.get_timecode_posix()
-                if tex_w > 0 and tex_h > 0 and self.vf.get_data_size() > 0:
-                    if curr_timecode != self.last_timecode or not self.has_frame:
+                fid = self.frame_id(self.vf)
+                if fid != self.last_frame_id or not self.has_frame:
+                    tex_w, tex_h = self.vf.get_resolution()
+                    latency = self.frame_latency_ms(self.vf)
+                    if self.renderer.draw(self.vf, self.win_w, self.win_h):
                         new_frame = True
-                        self.last_timecode = curr_timecode
+                        self.last_frame_id = fid
+                        self.rr.note_frame(now)
                         self.has_frame = True
-                        if self.last_frame_w != tex_w or self.last_frame_h != tex_h:
-                            self.is_texture_initialized = False
                         self.last_frame_w, self.last_frame_h = tex_w, tex_h
+                        self.last_latency_ms = latency
                         self.frames_rendered += 1
-
-                        with memoryview(self.vf) as mv:
-                            frame_arr = self.np.frombuffer(mv, dtype=self.np.uint8)
-                            try:
-                                self.is_texture_initialized = self.render_texture(
-                                    frame_arr, self.last_frame_w, self.last_frame_h, self.win_w, self.win_h,
-                                    self.texture_id, self.options.recv_fmt, self.is_texture_initialized
-                                )
-                            finally:
-                                del frame_arr
                         if show_banner:
                             self.render_ip_banner(self.overlay_tex_id, self.local_ip, self.current_source_name, self.win_w, self.win_h)
                         self.sdl2.SDL_GL_SwapWindow(self.window)
@@ -262,10 +281,10 @@ class RxWorker:
                 self.is_connected = False
                 self.reconnect_cooldown_until = now + 1.0
                 self.has_frame = False
-                self.last_timecode = -1.0
-                self.is_texture_initialized = False
+                self.last_frame_id = None
+                self.renderer.reset()
             if not new_frame:
-                time.sleep(0.002)
+                time.sleep(self.frame_poll_interval)
 
             if self.af is not None:
                 try:
@@ -309,6 +328,7 @@ class RxWorker:
                 "width": self.last_frame_w,
                 "height": self.last_frame_h,
                 "fps_real": real_fps,
+                "latency_ms": round(self.last_latency_ms, 1) if self.last_latency_ms is not None else None,
                 "audio_level_l": self.last_audio_levels[0],
                 "audio_level_r": self.last_audio_levels[1],
                 "audio_peak_l": self.last_audio_peaks[0],
@@ -337,9 +357,11 @@ class RxWorker:
                 self.finder.close()
             except Exception:
                 pass
-        if self.texture_id is not None and self.overlay_tex_id is not None:
+        if self.renderer is not None:
+            self.renderer.delete()
+        if self.overlay_tex_id is not None:
             try:
-                self.glDeleteTextures(2, [self.texture_id, self.overlay_tex_id])
+                self.glDeleteTextures(1, [self.overlay_tex_id])
             except Exception:
                 pass
         if self.window is not None:
@@ -406,6 +428,7 @@ class RxRunner:
                     self._current_status.width = msg.get("width", 0)
                     self._current_status.height = msg.get("height", 0)
                     self._current_status.fps_real = msg.get("fps_real", 0.0)
+                    self._current_status.latency_ms = msg.get("latency_ms")
                     self._current_status.audio_level_l = msg.get("audio_level_l", -60.0)
                     self._current_status.audio_level_r = msg.get("audio_level_r", -60.0)
                     self._current_status.audio_peak_l = msg.get("audio_peak_l", -60.0)
@@ -415,7 +438,7 @@ class RxRunner:
             except queue.Empty:
                 break
 
-    def start(self, sender_name: str, recv_fmt: str = "rgb", recv_bandwidth: str = "highest", fullscreen: bool = False):
+    def start(self, sender_name: str, recv_fmt: str = "uyvy", recv_bandwidth: str = "highest", fullscreen: bool = False):
         if self.process and self.process.is_alive():
             raise RuntimeError("RX is already running. Please switch source or stop first.")
 

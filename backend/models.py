@@ -28,7 +28,7 @@ class AudioDeviceItem(BaseModel):
 
 class RxStartRequest(BaseModel):
     sender_name: str
-    recv_fmt: str = Field(default="rgb", description="uyvy, rgb, or bgr")
+    recv_fmt: str = Field(default="uyvy", description="uyvy, rgb, or bgr")
     recv_bandwidth: str = Field(default="highest", description="lowest or highest")
     fullscreen: bool = False
 
@@ -49,13 +49,14 @@ class RxStatus(BaseModel):
     running: bool
     is_connected: bool
     current_source: Optional[str] = None
-    recv_fmt: str = "rgb"
+    recv_fmt: str = "uyvy"
     recv_bandwidth: str = "highest"
     fullscreen: bool = False
     width: int = 0
     height: int = 0
     fps: float = 0.0
     fps_real: float = 0.0
+    latency_ms: Optional[float] = Field(default=None, description="Sender timestamp to display time (ms); requires synced clocks")
     dropped_frames: int = 0
     audio_level_l: float = -60.0
     audio_level_r: float = -60.0
@@ -99,7 +100,7 @@ class TxStatus(BaseModel):
 class RxPresetSettings(BaseModel):
     auto_start: bool = False
     sender_name: Optional[str] = None
-    recv_fmt: str = "rgb"
+    recv_fmt: str = "uyvy"
     recv_bandwidth: str = "highest"
     fullscreen: bool = False
 

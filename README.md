@@ -67,6 +67,17 @@ $ uv run main.py web --host 0.0.0.0 --port 8000
 $ uv run main.py rx -s "<NDI Source Name>" --fullscreen
 ```
 `<NDI Source Name>`を省略した場合は、ネットワーク上のNDIソースを自動検索し、対話式メニューから選択して起動できます。
+
+> [!TIP]
+> **低遅延で表示する (KMS/DRM 直接出力)**  
+> RX専用機では、デスクトップ（Wayland / X11 のコンポジタ）を経由せずにディスプレイへ直接描画することで、1〜2フレーム分の遅延を削減できます。
+> ```bash
+> $ uv run main.py rx -s "<NDI Source Name>" --video-driver kmsdrm
+> $ uv run main.py web --video-driver kmsdrm   # Web UI から起動する RX / マルチビューにも適用
+> ```
+> - そのディスプレイでデスクトップセッションが動いていないこと（コンソール / TTY 状態）が必要です。`sudo systemctl set-default multi-user.target` で GUI を起動しない設定にできます。
+> - 実行ユーザーを `video`（画面）と `input`（ESCキー）グループに追加してください: `sudo usermod -aG video,input $USER`
+> - 常に全画面表示になります。`WAYLAND_DISPLAY` / `DISPLAY` の指定は不要です。
 *(※SSH 経由で直接 `rx` を起動する場合も、上記と同様に `WAYLAND_DISPLAY` または `DISPLAY` 環境変数が必要です)*
 
 ### 3. NDIソースの送信 (TX)
