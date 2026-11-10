@@ -3,10 +3,10 @@ Description=NDI Web GUI (FastAPI)
 After=network.target
 
 [Service]
-ExecStart=%h/utone-ndi-utils/.venv/bin/python %h/utone-ndi-utils/main.py web
+ExecStart=%h/moip-toolkit/.venv/bin/python %h/moip-toolkit/main.py web
 # Lowest latency on a dedicated display machine (no desktop session; user in `video` and `input` groups):
-#ExecStart=%h/utone-ndi-utils/.venv/bin/python %h/utone-ndi-utils/main.py web --video-driver kmsdrm
-WorkingDirectory=%h/utone-ndi-utils
+#ExecStart=%h/moip-toolkit/.venv/bin/python %h/moip-toolkit/main.py web --video-driver kmsdrm
+WorkingDirectory=%h/moip-toolkit
 Restart=always
 RestartSec=3
 # Cap memory so a runaway process is killed (and restarted) instead of taking down the OS

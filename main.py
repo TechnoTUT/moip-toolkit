@@ -1,6 +1,6 @@
 """
 main.py
-Unified CLI entry point for utone-ndi-utils.
+Unified CLI entry point for moip-toolkit.
 Supports `rx`, `tx`, and `web` subcommands.
 """
 from __future__ import annotations
@@ -17,7 +17,7 @@ from cli.signage_cmd import signage_command
 @click.group()
 @click.version_option(version="1.0.0")
 def cli():
-    """utone-ndi-utils: NDI Video & Audio Transmission Toolkit for DJ Events."""
+    """moip-toolkit: NDI Video & Audio Transmission Toolkit for DJ Events."""
     pass
 
 
@@ -33,7 +33,7 @@ def web_command(host: str, port: int, reload: bool, video_driver: str):
 
     apply_video_driver(video_driver)
 
-    click.echo(f"Starting utone-ndi-utils Web API server on http://{host}:{port}")
+    click.echo(f"Starting moip-toolkit Web API server on http://{host}:{port}")
 
     config = uvicorn.Config(
         "backend.main:app",

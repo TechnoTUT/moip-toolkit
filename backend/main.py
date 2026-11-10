@@ -106,7 +106,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="utone-ndi-utils API",
+    title="moip-toolkit API",
     description="REST API to control NDI RX (Viewer) and TX (Sender)",
     version="1.0.0",
     lifespan=lifespan,

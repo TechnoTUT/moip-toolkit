@@ -1,10 +1,13 @@
 # moip-toolkit
-NDIを活用することでDJイベント "The Utopia Tone" の映像伝送をIPネットワーク上に移行します。  
-PythonとSDL2を使用してNDIソースを受信し全画面表示を行ったり、OpenCVを使用してNDIソースの送信を行います。また、FastAPIによるWeb APIおよびブラウザUIからの遠隔操作に対応しています。
 
-## 使い方
-動作にはPython3及びavahi-daemon、libgl1-mesa-dev、portaudio19-devが必要です。
-以下のコマンドで必要なパッケージをインストールしてください。
+**English** | [日本語](README.ja.md)
+
+By using NDI, this toolkit moves video transport for the DJ event "The Utopia Tone" onto an IP network.  
+It receives NDI sources and displays them fullscreen using Python and SDL2, and sends NDI sources using OpenCV. It also supports remote control through a Web API built with FastAPI and a browser UI.
+
+## Getting Started
+Python 3, avahi-daemon, libgl1-mesa-dev and portaudio19-dev are required.
+Install the required packages with the following commands.
 ```bash
 # Debian/Ubuntu
 $ sudo apt install git curl avahi-daemon libgl1-mesa-dev portaudio19-dev
@@ -13,24 +16,24 @@ $ sudo dnf install git curl avahi mesa-libGL-devel portaudio-devel
 $ curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-次に、リポジトリをクローンし、仮想環境を作成して依存関係をインストールします。
+Next, clone the repository, create a virtual environment and install the dependencies.
 ```bash
-$ git clone https://github.com/TechnoTUT/utone-ndi-utils.git
-$ cd utone-ndi-utils
+$ git clone https://github.com/TechnoTUT/moip-toolkit.git
+$ cd moip-toolkit
 $ uv venv
 $ uv pip install -r requirements.txt
 ```
 
 ---
 
-## 起動コマンド
+## Commands
 
-統合CLI `main.py` から `rx` / `tx` / `web` の各機能を統一的に実行できます。
+The unified CLI `main.py` runs the `rx` / `tx` / `multiview` / `signage` / `web` features from a single entry point.
 
-### 1. Web API / ブラウザUI
-フロントエンドをビルドすることで、ブラウザからNDIソース探索、受信（RX）切り替え、送信（TX）開始・停止を直感的に操作できます。
+### 1. Web API / Browser UI
+Once the frontend is built, you can discover NDI sources, switch the receiver (RX), and start/stop the transmitter (TX) from your browser.
 
-#### UIのビルド
+#### Building the UI
 ```bash
 $ cd frontend
 $ npm install
@@ -38,125 +41,139 @@ $ npm run build
 $ cd ..
 ```
 
-#### サーバー起動
+#### Starting the server
 ```bash
 $ uv run main.py web --host 0.0.0.0 --port 8000
 ```
-- ブラウザ操作画面: `http://localhost:8000/`
-- APIドキュメント（Swagger UI）: `http://localhost:8000/docs`
+- Browser UI: `http://localhost:8000/`
+- API docs (Swagger UI): `http://localhost:8000/docs`
 
 > [!TIP]
-> **SSH やリモート接続から起動する場合の環境変数**  
-> SSH 経由で起動したサーバーから実機のディスプレイに RX ウィンドウを表示する場合、ディスプレイサーバー（Wayland / X11）へのアクセス環境変数が必要です。
+> **Environment variables when starting from SSH or a remote connection**  
+> To show the RX window on the physical display from a server started over SSH, you need environment variables that give access to the display server (Wayland / X11).
 >
-> 1. **セッション種別の確認方法**:
+> 1. **Check the session type**:
 >    ```bash
 >    $ loginctl show-session $(loginctl | grep $(whoami) | awk '{print $1}') -p Type
 >    ```
-> 2. **Wayland 環境の場合** (`Type=wayland`):
+> 2. **On Wayland** (`Type=wayland`):
 >    ```bash
 >    $ WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/$(id -u) uv run main.py web --host 0.0.0.0 --port 8000
 >    ```
-> 3. **X11 環境の場合** (`Type=x11`):
+> 3. **On X11** (`Type=x11`):
 >    ```bash
 >    $ DISPLAY=:0 XAUTHORITY=$HOME/.Xauthority uv run main.py web --host 0.0.0.0 --port 8000
 >    ```
 
-### 2. NDIソースの受信・全画面表示 (RX)
+### 2. Receive and display an NDI source fullscreen (RX)
 ```bash
 $ uv run main.py rx -s "<NDI Source Name>" --fullscreen
 ```
-`<NDI Source Name>`を省略した場合は、ネットワーク上のNDIソースを自動検索し、対話式メニューから選択して起動できます。
+If `<NDI Source Name>` is omitted, the NDI sources on the network are discovered automatically and you can pick one from an interactive menu.
 
 > [!TIP]
-> **低遅延で表示する (KMS/DRM 直接出力)**  
-> RX専用機では、デスクトップ（Wayland / X11 のコンポジタ）を経由せずにディスプレイへ直接描画することで、1〜2フレーム分の遅延を削減できます。
+> **Low-latency display (direct KMS/DRM output)**  
+> On a dedicated RX machine, drawing directly to the display without going through the desktop compositor (Wayland / X11) cuts 1–2 frames of latency.
 > ```bash
 > $ uv run main.py rx -s "<NDI Source Name>" --video-driver kmsdrm
-> $ uv run main.py web --video-driver kmsdrm   # Web UI から起動する RX / マルチビューにも適用
+> $ uv run main.py web --video-driver kmsdrm   # Also applies to RX / multiview launched from the Web UI
 > ```
-> - そのディスプレイでデスクトップセッションが動いていないこと（コンソール / TTY 状態）が必要です。`sudo systemctl set-default multi-user.target` で GUI を起動しない設定にできます。
-> - 実行ユーザーを `video`（画面）と `input`（ESCキー）グループに追加してください: `sudo usermod -aG video,input $USER`
-> - 常に全画面表示になります。`WAYLAND_DISPLAY` / `DISPLAY` の指定は不要です。
-*(※SSH 経由で直接 `rx` を起動する場合も、上記と同様に `WAYLAND_DISPLAY` または `DISPLAY` 環境変数が必要です)*
+> - No desktop session may be running on that display (console / TTY state). `sudo systemctl set-default multi-user.target` makes the machine boot without a GUI.
+> - Add the user running it to the `video` (display) and `input` (ESC key) groups: `sudo usermod -aG video,input $USER`
+> - Output is always fullscreen. You do not need to set `WAYLAND_DISPLAY` / `DISPLAY`.
 
-### 3. NDIソースの送信 (TX)
+*(Note: when launching `rx` directly over SSH, the `WAYLAND_DISPLAY` or `DISPLAY` environment variable is also required, as above.)*
+
+### 3. Send an NDI source (TX)
 ```bash
 $ uv run main.py tx
 ```
-接続されているカメラ・マイクデバイスの確認:
+List the connected camera and microphone devices:
 ```bash
 $ uv run main.py tx --list-devices
 ```
 
-### 4. デジタルサイネージ (Signage)
-Web UI から画像をアップロードし、接続されたディスプレイに直接全画面表示できます。  
-CLIから直接画像ファイルを指定して全画面表示することも可能です:
+### 4. Multi-viewer (Multiview)
+Monitor multiple NDI sources at once in an auto-arranged grid.
+```bash
+$ uv run main.py multiview --fullscreen
+$ uv run main.py multiview -s CAM1 -s CAM2   # Only the specified sources
+```
+If `-s` is omitted, all discovered sources are shown.
+
+### 5. Digital Signage
+Upload an image from the Web UI and show it fullscreen directly on a connected display.  
+You can also specify an image file from the CLI and show it fullscreen:
 ```bash
 $ uv run main.py signage -i /path/to/image.png --fullscreen
 ```
-*(※`-i` を省略した場合は、Web UI等でアップロードされた最新の画像が表示されます)*
+*(Note: if `-i` is omitted, the most recent image uploaded via the Web UI is shown.)*
 
-#### CLI環境（TTY）での表示
-`--framebuffer` オプションを使用すると、SDL2/OpenGLの代わりにLinuxフレームバッファ（`/dev/fb0`）に直接描画します。SSH接続やコンソール（TTY）などのGUI環境がない場合でも表示できます。
+#### Display on a CLI environment (TTY)
+The `--framebuffer` option draws directly to the Linux framebuffer (`/dev/fb0`) instead of using SDL2/OpenGL. This works without a GUI, such as over SSH or on a console (TTY).
 ```bash
 $ uv run main.py signage -i /path/to/image.png --framebuffer
 ```
-- `--fb-device` オプションでフレームバッファデバイスのパスを変更できます（デフォルト: `/dev/fb0`）
-- フレームバッファへの書き込みにはroot権限が必要な場合があります
+- Use `--fb-device` to change the framebuffer device path (default: `/dev/fb0`).
+- Writing to the framebuffer may require root privileges.
 
 ---
 
-## ディレクトリ構成
+## Directory Structure
 ```
-utone-ndi-utils/
-├── core/                   # 低レベル共通コアロジック
-│   ├── rx.py               # SDL2初期化、OpenGL描画、フレーム同期、NDI受信定義
-│   ├── tx.py               # カメラ取得スレッド、映像/音声NDI送信スレッド
-│   ├── multiview.py        # 複数NDIグリッド表示ロジック
-│   └── signage.py          # SDL2/OpenGLまたはLinuxフレームバッファによる画像サイネージ描画
-├── cli/                    # コマンドラインUI定義
-│   ├── menu.py             # 対話型NDIソース選択メニュー
-│   ├── rx_cmd.py           # rx コマンド定義
-│   ├── tx_cmd.py           # tx コマンド定義
-│   ├── multiview_cmd.py    # multiview コマンド定義
-│   └── signage_cmd.py      # signage コマンド定義
-├── backend/                # FastAPI Web API & プロセス制御
-│   ├── models.py           # Pydantic スキーマ
-│   ├── ndi_scanner.py      # NDIソース自動探索サービス
-│   ├── devices.py          # カメラ・オーディオデバイス検出
-│   ├── rx_runner.py        # RXプロセスコントローラー
-│   ├── tx_runner.py        # TXプロセスコントローラー
-│   ├── multiview_runner.py # マルチビュープロセスコントローラー
-│   ├── signage_runner.py   # サイネージプロセスコントローラー
-│   ├── webrtc_manager.py   # WebRTC低遅延プレビューマネージャー
-│   └── main.py             # REST APIエンドポイント
+moip-toolkit/
+├── core/                   # Low-level shared core logic
+│   ├── rx.py               # SDL2 init, OpenGL rendering, frame sync, NDI receive definitions
+│   ├── reconnecting_receiver.py # NDI receiver with reconnect / stall-recovery handling
+│   ├── tx.py               # Camera capture thread, video/audio NDI send threads
+│   ├── multiview.py        # Multi-NDI grid display logic
+│   └── signage.py          # Image signage rendering via SDL2/OpenGL or the Linux framebuffer
+├── cli/                    # Command-line UI definitions
+│   ├── menu.py             # Interactive NDI source selection menu
+│   ├── rx_cmd.py           # rx command definition
+│   ├── tx_cmd.py           # tx command definition
+│   ├── multiview_cmd.py    # multiview command definition
+│   └── signage_cmd.py      # signage command definition
+├── backend/                # FastAPI Web API & process control
+│   ├── models.py           # Pydantic schemas
+│   ├── ndi_scanner.py      # Automatic NDI source discovery service
+│   ├── devices.py          # Camera / audio device detection
+│   ├── rx_runner.py        # RX process controller
+│   ├── tx_runner.py        # TX process controller
+│   ├── multiview_runner.py # Multiview process controller
+│   ├── signage_runner.py   # Signage process controller
+│   ├── webrtc_manager.py   # Low-latency WebRTC preview manager
+│   ├── preview_manager.py  # On-demand MJPEG preview streamer
+│   ├── settings.py         # Persistent server settings (JSON)
+│   ├── system_monitor.py   # Lightweight system resource monitor
+│   └── main.py             # REST API endpoints
 ├── data/
-│   └── signage/            # アップロードされたサイネージ画像保存先
-├── frontend/               # Nuxt 3 / Vue 3 管理Webダッシュボード
-├── main.py                 # 統合CLIエントリーポイント (rx / tx / multiview / signage / web)
+│   └── signage/            # Storage for uploaded signage images
+├── frontend/               # Nuxt 3 / Vue 3 admin web dashboard
+├── main.py                 # Unified CLI entry point (rx / tx / multiview / signage / web)
 ├── requirements.txt
-└── systemd-example/        # systemd用ユニット設定例
+└── systemd-example/        # Example systemd unit files
 ```
 
 ---
 
-## 自動起動設定 (systemd)
-Systemdを使用して自動起動する場合は、以下の手順を実行します。GUIなしの環境でも動作します。  
-`ExecStart` と `WorkingDirectory` のパスを環境に合わせて設定してください。
+## Autostart (systemd)
+To start automatically with systemd, follow the steps below. This also works on environments without a GUI.  
+Set the `ExecStart` and `WorkingDirectory` paths to match your environment.  
+Unit files for TX (`ndi-tx.service`) and the Web UI (`ndi-web.service`) are also provided in `systemd-example/`.
 ```bash
 $ mkdir -p ~/.config/systemd/user
 $ cp systemd-example/ndi-rx.service ~/.config/systemd/user/
 $ vim ~/.config/systemd/user/ndi-rx.service
 ```
 
-自動起動を有効にします。
+Enable autostart.
 ```bash
 $ systemctl --user daemon-reload
 $ systemctl --user enable --now ndi-rx.service
 ```
 
-システム起動時にログインなしで自動起動する場合は、lingerを有効にします。
+To start automatically at boot without logging in, enable linger.
 ```bash
 $ sudo loginctl enable-linger username
 ```
