@@ -346,6 +346,9 @@ func (s *Server) txStart(w http.ResponseWriter, r *http.Request) {
 		st.TX.AudioDevice = req.AudioDevice
 		st.TX.NoAudio = req.NoAudio
 		st.TX.XRes, st.TX.YRes, st.TX.FPS = req.XRes, req.YRes, req.FPS
+		if req.InputFormat != "" {
+			st.TX.InputFormat = req.InputFormat
+		}
 	})
 	writeJSON(w, s.Jobs.TxStatus())
 }
@@ -541,6 +544,7 @@ func (s *Server) AutoStart() {
 		err := s.Jobs.StartTx(model.TxStartRequest{
 			VideoDevice: st.TX.VideoDevice, AudioDevice: st.TX.AudioDevice, NoAudio: st.TX.NoAudio,
 			SenderName: st.TX.SenderName, XRes: st.TX.XRes, YRes: st.TX.YRes, FPS: st.TX.FPS,
+			InputFormat: st.TX.InputFormat,
 		})
 		log.Printf("[autostart] TX %q: %v", st.TX.SenderName, errOrOK(err))
 	}

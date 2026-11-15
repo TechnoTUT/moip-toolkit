@@ -258,9 +258,17 @@ func (m *Manager) StartTx(req model.TxStartRequest) error {
 	if req.AudioChannels <= 0 {
 		req.AudioChannels = 2
 	}
+	switch req.InputFormat {
+	case "":
+		req.InputFormat = "auto"
+	case "auto", "yuyv", "uyvy", "mjpg":
+	default:
+		return fmt.Errorf("invalid input_format %q (auto, yuyv, uyvy or mjpg)", req.InputFormat)
+	}
 	m.StopTx()
 	args := []string{"tx", "-n", req.SenderName, "-d", strconv.Itoa(req.VideoDevice),
 		"--width", strconv.Itoa(req.XRes), "--height", strconv.Itoa(req.YRes), "--fps", req.FPS,
+		"--input-format", req.InputFormat,
 		"--sample-rate", strconv.Itoa(req.SampleRate), "--audio-channels", strconv.Itoa(req.AudioChannels)}
 	if req.NoAudio {
 		args = append(args, "--no-audio")

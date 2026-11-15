@@ -78,6 +78,7 @@ type TxStartRequest struct {
 	XRes          int     `json:"x_res"`
 	YRes          int     `json:"y_res"`
 	FPS           string  `json:"fps"`
+	InputFormat   string  `json:"input_format"`
 	SampleRate    int     `json:"sample_rate"`
 	AudioChannels int     `json:"audio_channels"`
 }
@@ -187,6 +188,7 @@ type TxPreset struct {
 	XRes        int     `json:"x_res"`
 	YRes        int     `json:"y_res"`
 	FPS         string  `json:"fps"`
+	InputFormat string  `json:"input_format"`
 }
 
 type AppSettings struct {
@@ -197,7 +199,7 @@ type AppSettings struct {
 func DefaultSettings() AppSettings {
 	return AppSettings{
 		RX: RxPreset{RecvFmt: "uyvy", RecvBandwidth: "highest"},
-		TX: TxPreset{SenderName: "TX", XRes: 1920, YRes: 1080, FPS: "30"},
+		TX: TxPreset{SenderName: "TX", XRes: 1920, YRes: 1080, FPS: "30", InputFormat: "auto"},
 	}
 }
 
