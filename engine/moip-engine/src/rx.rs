@@ -58,8 +58,8 @@ pub struct Args {
     pub recv_bandwidth: Bandwidth,
     #[arg(short, long)]
     pub fullscreen: bool,
-    /// SDL video driver: auto, kmsdrm, wayland or x11.
-    #[arg(long, default_value = "auto", value_parser = clap::builder::PossibleValuesParser::new(gfx::VIDEO_DRIVERS))]
+    /// SDL video driver: kmsdrm (default; falls back to the desktop if unavailable), auto, wayland or x11.
+    #[arg(long, default_value = gfx::DEFAULT_VIDEO_DRIVER, value_parser = clap::builder::PossibleValuesParser::new(gfx::VIDEO_DRIVERS))]
     pub video_driver: String,
     /// Comma-separated IPs to query for sources (networks without mDNS).
     #[arg(long)]

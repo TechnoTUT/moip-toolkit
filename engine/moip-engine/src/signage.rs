@@ -14,7 +14,7 @@ pub struct Args {
     pub image: PathBuf,
     #[arg(short, long)]
     pub fullscreen: bool,
-    #[arg(long, default_value = "auto", value_parser = clap::builder::PossibleValuesParser::new(gfx::VIDEO_DRIVERS))]
+    #[arg(long, default_value = gfx::DEFAULT_VIDEO_DRIVER, value_parser = clap::builder::PossibleValuesParser::new(gfx::VIDEO_DRIVERS))]
     pub video_driver: String,
     /// Draw to a Linux framebuffer device instead of SDL/OpenGL.
     #[arg(long)]

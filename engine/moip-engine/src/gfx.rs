@@ -13,7 +13,10 @@ use std::collections::HashMap;
 
 use crate::font;
 
-pub const VIDEO_DRIVERS: [&str; 4] = ["auto", "kmsdrm", "wayland", "x11"];
+pub const VIDEO_DRIVERS: [&str; 4] = ["kmsdrm", "auto", "wayland", "x11"];
+
+/// Default SDL video driver: render straight to the display (lowest latency).
+pub const DEFAULT_VIDEO_DRIVER: &str = "kmsdrm";
 
 pub enum WinEvent {
     Quit,
@@ -35,9 +38,33 @@ pub struct Window {
 impl Window {
     /// Open an OpenGL window. `video_driver` selects the SDL backend; "kmsdrm"
     /// renders straight to the display without a compositor (always fullscreen).
+    ///
+    /// If KMS/DRM is unavailable (e.g. a desktop session owns the display),
+    /// falls back to SDL's automatic choice (Wayland / X11) with a warning.
     pub fn open(title: &str, width: u32, height: u32, fullscreen: bool, video_driver: Option<&str>) -> Result<Self> {
-        if let Some(d) = video_driver.filter(|d| !d.is_empty() && *d != "auto") {
-            std::env::set_var("SDL_VIDEODRIVER", d);
+        let driver = video_driver.filter(|d| !d.is_empty() && *d != "auto");
+        let win = match Self::open_with(title, width, height, fullscreen, driver) {
+            Err(e) if driver == Some("kmsdrm") => {
+                crate::log!("[SDL] kmsdrm unavailable ({e:#}); falling back to the desktop (use --video-driver auto to skip kmsdrm)");
+                Self::open_with(title, width, height, fullscreen, None)?
+            }
+            r => r?,
+        };
+        // SDL's automatic choice ends at an invisible driver when there is no
+        // display at all; treat that as an error instead of showing nothing.
+        if driver != Some(win.driver.as_str()) && matches!(win.driver.as_str(), "offscreen" | "dummy" | "evdev") {
+            anyhow::bail!(
+                "no display available (SDL picked \"{}\"): the display is in use by another process, or no desktop session is reachable (set WAYLAND_DISPLAY / DISPLAY)",
+                win.driver
+            );
+        }
+        Ok(win)
+    }
+
+    fn open_with(title: &str, width: u32, height: u32, fullscreen: bool, driver: Option<&str>) -> Result<Self> {
+        match driver {
+            Some(d) => std::env::set_var("SDL_VIDEODRIVER", d),
+            None => std::env::remove_var("SDL_VIDEODRIVER"),
         }
         // One queued frame fewer between swap and scan-out where supported (KMSDRM).
         sdl2::hint::set("SDL_VIDEO_DOUBLE_BUFFER", "1");
