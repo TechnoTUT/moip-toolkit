@@ -98,7 +98,7 @@ func runWeb(args []string) error {
 	fs := flag.NewFlagSet("web", flag.ExitOnError)
 	host := fs.String("host", "0.0.0.0", "listen address")
 	port := fs.Int("port", 8000, "listen port")
-	videoDriver := fs.String("video-driver", "auto", "SDL video driver for RX / multiview / signage: auto, kmsdrm, wayland, x11")
+	videoDriver := fs.String("video-driver", "kmsdrm", "SDL video driver for RX / multiview / signage: kmsdrm (falls back to the desktop if unavailable), auto, wayland, x11")
 	enginePath := fs.String("engine", "", "path to moip-engine (default: next to this binary, then $PATH)")
 	staticDir := fs.String("static", "", "built web UI directory (default: frontend/.output/public)")
 	dataDir := fs.String("data", "", "data directory holding signage/ (default: <repo>/data or ~/.local/share/moip-toolkit)")

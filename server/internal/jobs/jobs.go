@@ -21,7 +21,7 @@ import (
 const stopTimeout = 3 * time.Second
 
 type Manager struct {
-	// VideoDriver is passed to display jobs (auto, kmsdrm, wayland, x11).
+	// VideoDriver is passed to display jobs (kmsdrm by default, auto, wayland, x11).
 	VideoDriver string
 	// WebPort is shown on the RX waiting screen.
 	WebPort int
@@ -149,7 +149,7 @@ func (m *Manager) stopDisplayExcept(keep string) {
 
 func (m *Manager) driverArgs() []string {
 	if m.VideoDriver == "" {
-		return []string{"--video-driver", "auto"}
+		return []string{"--video-driver", "kmsdrm"}
 	}
 	return []string{"--video-driver", m.VideoDriver}
 }
