@@ -15,12 +15,14 @@ interface NDISource {
 
 interface VideoDevice {
   index: number
+  path?: string
   name: string
+  formats?: string[]
   is_available: boolean
 }
 
 interface AudioDevice {
-  index: number
+  id: string
   name: string
   max_input_channels: number
   default_samplerate: number
@@ -37,8 +39,11 @@ interface RxStatus {
   height: number
   fps: number
   fps_real?: number
+  fps_recv?: number
   latency_ms?: number | null
   dropped_frames?: number
+  skipped_frames?: number
+  video_driver?: string
   error: string | null
 }
 
@@ -46,8 +51,11 @@ interface TxStatus {
   running: boolean
   sender_name: string | null
   video_device: number | null
-  audio_device: number | null
+  audio_device: string | null
   no_audio: boolean
+  input_format?: string
+  connections?: number
+  dropped_frames?: number
   actual_width: number
   actual_height: number
   actual_fps: number
@@ -81,12 +89,12 @@ interface AppSettings {
     auto_start: boolean
     sender_name: string
     video_device: number
-    audio_device: number | null
+    audio_device: string | null
     no_audio: boolean
     x_res: number
     y_res: number
     fps: string
-    pix_fmt: string
+    input_format: string
   }
 }
 
@@ -174,7 +182,7 @@ const appSettings = ref<AppSettings>({
     x_res: 1920,
     y_res: 1080,
     fps: '30',
-    pix_fmt: 'BGRX'
+    input_format: 'auto'
   }
 })
 
@@ -230,11 +238,11 @@ const rxAutoStart = ref(false)
 
 const txSenderName = ref('TX')
 const txVideoDevice = ref(0)
-const txAudioDevice = ref<number | null>(null)
+const txAudioDevice = ref<string | null>(null)
 const txNoAudio = ref(false)
 const txResolution = ref('1920x1080')
 const txFps = ref('30')
-const txPixFmt = ref('BGRX')
+const txInputFormat = ref('auto')
 const txAutoStart = ref(false)
 
 // Loading states
@@ -340,7 +348,7 @@ async function fetchDevices() {
       const devs = await aRes.json()
       audioDevices.value = devs
       if (devs.length > 0 && txAudioDevice.value === null) {
-        txAudioDevice.value = devs[0].index
+        txAudioDevice.value = devs[0].id
       }
     }
   } catch (e) {
@@ -431,7 +439,7 @@ async function startTx() {
         x_res: x,
         y_res: y,
         fps: txFps.value,
-        pix_fmt: txPixFmt.value,
+        input_format: txInputFormat.value,
         sample_rate: 48000,
         audio_channels: 2
       })
@@ -521,7 +529,7 @@ async function fetchSettings() {
         if (data.tx.no_audio !== undefined) txNoAudio.value = data.tx.no_audio
         if (data.tx.x_res && data.tx.y_res) txResolution.value = `${data.tx.x_res}x${data.tx.y_res}`
         if (data.tx.fps) txFps.value = data.tx.fps
-        if (data.tx.pix_fmt) txPixFmt.value = data.tx.pix_fmt
+        if (data.tx.input_format) txInputFormat.value = data.tx.input_format
       }
     }
   } catch (e) {
@@ -557,7 +565,7 @@ async function toggleTxAutoStart() {
       x_res: x || 1920,
       y_res: y || 1080,
       fps: txFps.value,
-      pix_fmt: txPixFmt.value
+      input_format: txInputFormat.value
     }
   }
   await saveSettings(updated)
@@ -1290,7 +1298,7 @@ onUnmounted(() => {
                   class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-[#C7000A]"
                 >
                   <option v-for="dev in videoDevices" :key="dev.index" :value="dev.index">
-                    {{ dev.name }} (index {{ dev.index }})
+                    {{ dev.name }}
                   </option>
                 </select>
               </div>
@@ -1325,17 +1333,18 @@ onUnmounted(() => {
                 </select>
               </div>
 
-              <!-- Pixel Format -->
+              <!-- Capture Format -->
               <div>
-                <label class="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">Color Format</label>
+                <label class="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">Capture Format</label>
                 <select
-                  v-model="txPixFmt"
+                  v-model="txInputFormat"
                   :disabled="txStatus.running"
                   class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-[#C7000A]"
                 >
-                  <option value="BGRX">BGRX (Default)</option>
-                  <option value="BGRA">BGRA</option>
-                  <option value="RGBA">RGBA</option>
+                  <option value="auto">Auto (Default)</option>
+                  <option value="yuyv">YUYV (uncompressed)</option>
+                  <option value="uyvy">UYVY (uncompressed)</option>
+                  <option value="mjpg">MJPEG</option>
                 </select>
               </div>
 
@@ -1360,7 +1369,7 @@ onUnmounted(() => {
                   :disabled="txStatus.running"
                   class="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:border-[#C7000A]"
                 >
-                  <option v-for="dev in audioDevices" :key="dev.index" :value="dev.index">
+                  <option v-for="dev in audioDevices" :key="dev.id" :value="dev.id">
                     {{ dev.name }} ({{ dev.max_input_channels }}ch, {{ dev.default_samplerate }}Hz)
                   </option>
                 </select>
