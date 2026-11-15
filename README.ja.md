@@ -210,13 +210,6 @@ $ sudo loginctl enable-linger $USER
 | GET/POST/DELETE | `/api/signage/...` | サイネージ画像（`images`、`upload`、`image/{filename}`）と表示（`start`、`stop`、`status`） |
 | GET/POST | `/api/system/status`、`/api/settings` | システム負荷、プリセットと自動起動 |
 
-以前のPython版からの変更点：
-
-- 音声入力はALSAのデバイスIDで指定します。`/api/devices/audio` は `index` の代わりに `id` を返し、TXのリクエストと設定の `audio_device` は文字列です。古い設定ファイルも読み込めますが、音声デバイスは選び直してください。
-- `pix_fmt` は廃止しました（映像は常にUYVYで送信します）。代わりに `input_format`（`auto`、`yuyv`、`uyvy`、`mjpg`）でキャプチャ形式を指定します。
-- ステータスの項目を追加しました。RX：`fps_recv`、`skipped_frames`、`video_driver`。TX：`input_format`、`connections`、`dropped_frames`。マルチビュー：`auto_discovery`。サイネージ：`output`。
-- RX・マルチビュー・サイネージはディスプレイを共有するため、どれかを起動すると他は停止します。
-
 ## ディレクトリ構成
 
 ```

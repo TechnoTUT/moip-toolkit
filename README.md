@@ -210,13 +210,6 @@ All endpoints are under `/api`. Errors are returned as `{"detail": "..."}`.
 | GET/POST/DELETE | `/api/signage/...` | Signage images (`images`, `upload`, `image/{filename}`) and display (`start`, `stop`, `status`) |
 | GET/POST | `/api/system/status`, `/api/settings` | System load, presets and auto-start |
 
-Changes from the previous Python version:
-
-- Audio inputs are ALSA device ids: `/api/devices/audio` returns `id` instead of `index`, and `audio_device` in TX requests and settings is a string. An old settings file still loads, but you need to choose the audio device again.
-- `pix_fmt` is gone (video is always sent as UYVY). The new `input_format` field (`auto`, `yuyv`, `uyvy`, `mjpg`) selects the capture format.
-- New status fields. RX: `fps_recv`, `skipped_frames`, `video_driver`. TX: `input_format`, `connections`, `dropped_frames`. Multiview: `auto_discovery`. Signage: `output`.
-- RX, multiview and signage share the display, so starting one of them stops the others.
-
 ## Repository layout
 
 ```
