@@ -39,31 +39,40 @@ flowchart TD
 
 ```bash
 # Debian / Ubuntu
-$ sudo apt install git build-essential pkg-config libsdl2-dev libasound2-dev avahi-daemon
+$ sudo apt install git curl build-essential pkg-config libsdl2-dev libasound2-dev avahi-daemon
 # Fedora
-$ sudo dnf install git gcc gcc-c++ pkgconf SDL2-devel alsa-lib-devel avahi
+$ sudo dnf install git curl gcc gcc-c++ pkgconf SDL2-devel alsa-lib-devel avahi
 ```
 
 ## Install the NDI SDK
 
 The NDI SDK is licensed by Vizrt NDI AB and **must not be committed to this repository**. Each machine needs its own copy of the runtime library. moip-toolkit does not need the SDK to build: it loads `libndi.so.6` when it starts.
 
-1. Download **NDI SDK for Linux** from <https://ndi.video/for-developers/ndi-sdk/> (you have to register).
-2. Extract the archive and run the installer. It asks you to accept the license, then creates a directory named `NDI SDK for Linux`:
-   ```bash
-   $ tar -xzf Install_NDI_SDK_v6_Linux.tar.gz
-   $ ./Install_NDI_SDK_v6_Linux.sh
-   ```
-3. Copy the runtime library for your CPU into the library path. Use `x86_64-linux-gnu` on PCs; on arm64 boards, use the matching `aarch64-*` directory under `lib/`.
-   ```bash
-   $ sudo cp -P "NDI SDK for Linux/lib/x86_64-linux-gnu/"libndi.so.6* /usr/local/lib/
-   $ sudo ldconfig
-   ```
-4. Check that the runtime is found (after [building](#build)):
-   ```bash
-   $ ./bin/moip version
-   NDI SDK LINUX ... 6.x.x
-   ```
+Install it with the bundled script, which follows [DistroAV's `libndi-get.sh`](https://github.com/DistroAV/DistroAV/blob/master/CI/libndi-get.sh):
+
+```bash
+$ scripts/install-ndi-sdk.sh
+```
+
+The script:
+
+1. downloads the official installer from `https://downloads.ndi.tv/SDK/NDI_SDK_Linux/Install_NDI_SDK_v6_Linux.tar.gz`;
+2. shows the NDI SDK license and asks you to accept it;
+3. copies `libndi.so.6*` for your CPU (x86_64, or arm64 from `lib/aarch64-*`) to `/usr/local/lib` with `sudo`, registers that directory with `ldconfig` if the system does not already search it (Fedora / RHEL), and runs `ldconfig`.
+
+Options, set as environment variables:
+
+| Variable | Description |
+|---|---|
+| `PREFIX=/opt/ndi` | Install to `$PREFIX/lib` instead of `/usr/local/lib` |
+| `NDI_ACCEPT_LICENSE=yes` | Accept the license without the prompt. Only use this after you have read and accepted it, e.g. when setting up more machines |
+
+Check that the runtime is found (after [building](#build)):
+
+```bash
+$ ./bin/moip version
+NDI SDK LINUX ... 6.x.x
+```
 
 If you would rather not install system-wide, point `NDI_RUNTIME_DIR_V6` at the directory that contains `libndi.so.6`.
 

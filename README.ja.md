@@ -39,31 +39,40 @@ flowchart TD
 
 ```bash
 # Debian / Ubuntu
-$ sudo apt install git build-essential pkg-config libsdl2-dev libasound2-dev avahi-daemon
+$ sudo apt install git curl build-essential pkg-config libsdl2-dev libasound2-dev avahi-daemon
 # Fedora
-$ sudo dnf install git gcc gcc-c++ pkgconf SDL2-devel alsa-lib-devel avahi
+$ sudo dnf install git curl gcc gcc-c++ pkgconf SDL2-devel alsa-lib-devel avahi
 ```
 
 ## NDI SDK のインストール
 
 NDI SDKはVizrt NDI ABのライセンスで提供されているため、**このリポジトリにコミットしないでください**。ランタイムライブラリは、各マシンにそれぞれインストールします。moip-toolkitは起動時に `libndi.so.6` を読み込むので、ビルド自体にSDKは不要です。
 
-1. <https://ndi.video/for-developers/ndi-sdk/> から **NDI SDK for Linux** をダウンロードします（登録が必要です）。
-2. アーカイブを展開してインストーラを実行します。ライセンスに同意すると、`NDI SDK for Linux` というディレクトリが作られます。
-   ```bash
-   $ tar -xzf Install_NDI_SDK_v6_Linux.tar.gz
-   $ ./Install_NDI_SDK_v6_Linux.sh
-   ```
-3. CPUに合ったランタイムライブラリを、ライブラリのパスにコピーします。PCでは `x86_64-linux-gnu` を、arm64のボードでは `lib/` 以下の該当する `aarch64-*` ディレクトリを使ってください。
-   ```bash
-   $ sudo cp -P "NDI SDK for Linux/lib/x86_64-linux-gnu/"libndi.so.6* /usr/local/lib/
-   $ sudo ldconfig
-   ```
-4. ランタイムが見つかることを確認します（[ビルド](#ビルド)の後に実行します）。
-   ```bash
-   $ ./bin/moip version
-   NDI SDK LINUX ... 6.x.x
-   ```
+同梱のスクリプトでインストールします。このスクリプトは [DistroAV の `libndi-get.sh`](https://github.com/DistroAV/DistroAV/blob/master/CI/libndi-get.sh) をもとにしています。
+
+```bash
+$ scripts/install-ndi-sdk.sh
+```
+
+スクリプトが行うこと：
+
+1. 公式のインストーラを `https://downloads.ndi.tv/SDK/NDI_SDK_Linux/Install_NDI_SDK_v6_Linux.tar.gz` からダウンロードします。
+2. NDI SDKのライセンスを表示し、同意を求めます。
+3. CPUに合った `libndi.so.6*`（x86_64、またはarm64では `lib/aarch64-*` のもの）を `sudo` で `/usr/local/lib` にコピーします。そのディレクトリがリンカの検索対象になっていない場合（Fedora / RHEL）は `ldconfig` に登録し、最後に `ldconfig` を実行します。
+
+環境変数で指定できるオプション：
+
+| 変数 | 説明 |
+|---|---|
+| `PREFIX=/opt/ndi` | `/usr/local/lib` の代わりに `$PREFIX/lib` にインストールする |
+| `NDI_ACCEPT_LICENSE=yes` | 確認なしでライセンスに同意する。既にライセンスを読んで同意している場合（複数台のセットアップなど）だけ使ってください |
+
+ランタイムが見つかることを確認します（[ビルド](#ビルド)の後に実行します）。
+
+```bash
+$ ./bin/moip version
+NDI SDK LINUX ... 6.x.x
+```
 
 システム全体にインストールしたくない場合は、`NDI_RUNTIME_DIR_V6` に `libndi.so.6` のあるディレクトリを指定してください。
 
