@@ -44,6 +44,10 @@ interface RxStatus {
   dropped_frames?: number
   skipped_frames?: number
   video_driver?: string
+  audio_level_l?: number
+  audio_level_r?: number
+  audio_peak_l?: number
+  audio_peak_r?: number
   error: string | null
 }
 
