@@ -77,6 +77,10 @@ def get_source(finder: Finder, name: str, timeout_seconds: float = 10.0) -> Sour
     for _ in range(max_loops):
         finder.wait_for_sources(0)
         for source in finder:
+            # A source that went offline stays listed as invalid for a while and its
+            # stream_name raises RuntimeError: skip it rather than abort the search.
+            if not source.valid:
+                continue
             if source.name == name or source.stream_name == name:
                 return source
         time.sleep(0.1)
@@ -501,6 +505,9 @@ def frame_latency_ms(vf) -> Optional[float]:
 # Poll interval while waiting for the next frame. Short enough that the added
 # delay between frame arrival and display is ~0.5ms on average.
 FRAME_POLL_INTERVAL = 0.001
+# A connected receiver that delivers no new frame for this long is replaced by a fresh one
+# (NDI can keep a dead session "connected" for minutes after a network outage).
+STALL_TIMEOUT = 2.0
 
 
 def play_sdl(options: Options, finder: Finder, log_fn=print):
@@ -531,13 +538,14 @@ def play_sdl(options: Options, finder: Finder, log_fn=print):
     start_time = time.time()
     local_ip = get_local_ip()
 
-    vf = VideoFrameSync()
     rr = ReconnectingReceiver(
         recv_fmt.value,
         options.recv_bandwidth.value,
-        vf,
+        VideoFrameSync(),
         connect_timeout=5.0,
-        retry_interval=2.0
+        retry_interval=2.0,
+        stall_timeout=STALL_TIMEOUT,
+        log=log_fn,
     )
 
     def find_source():
@@ -577,9 +585,11 @@ def play_sdl(options: Options, finder: Finder, log_fn=print):
             drawn = False
             try:
                 receiver.frame_sync.capture_video()
+                vf = rr.video_frame  # replaced when a stalled receiver is swapped out
                 fid = frame_id(vf)
                 if fid != last_frame_id and renderer.draw(vf, win_w, win_h):
                     last_frame_id = fid
+                    rr.note_frame(now)
                     if show_banner:
                         render_ip_banner(overlay_tex_id, local_ip, options.sender_name, win_w, win_h)
                     sdl2.SDL_GL_SwapWindow(window)

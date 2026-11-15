@@ -38,6 +38,7 @@ class RxWorker:
             RecvFmt, Bandwidth, Options, FrameRenderer, render_waiting_message,
             render_ip_banner, get_local_ip, init_window, frame_id, frame_latency_ms,
             FRAME_POLL_INTERVAL,
+            STALL_TIMEOUT,
         )
         import numpy as np
 
@@ -75,11 +76,14 @@ class RxWorker:
         self.renderer = FrameRenderer()
         recv_fmt = self.renderer.resolve_recv_fmt(self.options.recv_fmt)
 
-        self.vf = VideoFrameSync()
-        self.af = AudioFrameSync() if AudioFrameSync is not None else None
+        # Frame objects are owned by the ReconnectingReceiver (it swaps them when it
+        # replaces a stalled receiver): always access them via self.vf / self.af.
         self.rr = ReconnectingReceiver(
-            recv_fmt.value, self.options.recv_bandwidth.value, self.vf, self.af,
+            recv_fmt.value, self.options.recv_bandwidth.value, VideoFrameSync(),
+            AudioFrameSync() if AudioFrameSync is not None else None,
             connect_timeout=10.0,
+            stall_timeout=STALL_TIMEOUT,
+            log=lambda msg: print(msg, flush=True),
         )
         self.receiver = None
 
@@ -163,30 +167,46 @@ class RxWorker:
                 glViewport(0, 0, self.win_w, self.win_h)
                 self.last_frame_id = None  # redraw at the new size
 
+    @property
+    def vf(self):
+        return self.rr.video_frame
+
+    @property
+    def af(self):
+        return self.rr.audio_frame
+
+    def _matches(self, s) -> bool:
+        # A source that went offline stays listed as invalid and its stream_name raises
+        # RuntimeError, which used to abort every lookup until the finder dropped it.
+        try:
+            if not getattr(s, "valid", True):
+                return False
+            s_name = getattr(s, "name", "") or ""
+            s_stream = getattr(s, "stream_name", "") or ""
+        except Exception:
+            return False
+        name = self.current_source_name
+        return (
+            s_name == name
+            or s_stream == name
+            or name in s_name
+            or bool(s_stream and s_stream in name)
+        )
+
+    def _find_source(self):
+        """Non-blocking lookup of the current source in the finder's list."""
+        try:
+            self.finder.wait_for_sources(0)
+        except Exception:
+            pass
+        return next((s for s in list(self.finder) if self._matches(s)), None)
+
     def update_connection(self, now: float):
         self.render_waiting_message(self.overlay_tex_id, self.local_ip, self.current_source_name, self.win_w, self.win_h)
         if self.receiver is None:
             if now >= self.reconnect_cooldown_until:
                 try:
-                    try:
-                        self.finder.wait_for_sources(0)
-                    except Exception:
-                        pass
-
-                    matched = None
-                    available = list(self.finder)
-                    for s in available:
-                        s_name = getattr(s, "name", "")
-                        s_stream = getattr(s, "stream_name", "")
-                        if (
-                            s_name == self.current_source_name
-                            or s_stream == self.current_source_name
-                            or self.current_source_name in s_name
-                            or (s_stream and s_stream in self.current_source_name)
-                        ):
-                            matched = s
-                            break
-
+                    matched = self._find_source()
                     if matched is not None:
                         self.receiver = self.rr.attach(matched, now)
                         self.connect_timeout_until = now + 10.0
@@ -220,6 +240,9 @@ class RxWorker:
         time.sleep(0.016)
 
     def render_active_frame(self, now: float, show_banner: bool):
+        if self.rr.check_stall(now, self._find_source):
+            # Fresh receiver; the last image stays on screen until its first frame.
+            self.receiver = self.rr.receiver
         if self.receiver.is_connected():
             self.last_connected_time = now
         elif now - self.last_connected_time > 4.0:
@@ -242,6 +265,7 @@ class RxWorker:
                     if self.renderer.draw(self.vf, self.win_w, self.win_h):
                         new_frame = True
                         self.last_frame_id = fid
+                        self.rr.note_frame(now)
                         self.has_frame = True
                         self.last_frame_w, self.last_frame_h = tex_w, tex_h
                         self.last_latency_ms = latency
