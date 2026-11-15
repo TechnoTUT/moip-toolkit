@@ -9,12 +9,12 @@ It receives NDI sources and shows them fullscreen with minimal latency, sends ca
 
 ```mermaid
 flowchart TD
-    browser["Browser<br/>(Nuxt / Vue web UI)"]
-    server["<b>moip web</b><br/>Go server (server/)"]
-    engine["<b>moip-engine</b><br/>Rust media engine (engine/)<br/>rx · tx · multiview · signage · preview · discover · devices"]
-    ndi["libndi.so.6<br/>NDI SDK runtime<br/>(installed separately, not in this repository)"]
-    display["Display<br/>(SDL2 / OpenGL, KMS/DRM)"]
-    capture["Capture devices<br/>(V4L2 video, ALSA audio)"]
+    browser["Browser<br/>Nuxt / Vue web UI"]
+    server["<b>moip web</b><br/>Go server, server/"]
+    engine["<b>moip-engine</b><br/>Rust media engine, engine/<br/>rx · tx · multiview · signage · preview · discover · devices"]
+    ndi["libndi.so.6<br/>NDI SDK runtime<br/>installed separately, not in this repository"]
+    display["Display<br/>KMS/DRM or desktop via SDL2 / OpenGL"]
+    capture["Capture devices<br/>V4L2 video, ALSA audio"]
     lan["NDI sources and receivers on the LAN"]
 
     browser -- "HTTP · Server-Sent Events · MJPEG · WebRTC" --> server
@@ -25,16 +25,16 @@ flowchart TD
     capture --> engine
 ```
 
-- **engine/** (Rust) does all the media work. It calls the NDI SDK directly, so there is no interpreter lock and no framesync buffering in the receive path: frames are uploaded to the GPU as soon as they arrive, and UYVY is converted to RGB in a shader. A stalled receiver is replaced at once and the old one is torn down on a background thread.
-- **server/** (Go) serves the web UI and API, starts and stops engine processes, and forwards browser previews (H.264 over WebRTC via [pion](https://github.com/pion/webrtc), with an MJPEG fallback) without transcoding them.
-- **frontend/** (Nuxt 3 / Vue 3) is the browser UI.
+- **engine/** is written in Rust and does all the media work. It calls the NDI SDK directly, so there is no interpreter lock and no framesync buffering in the receive path: frames are uploaded to the GPU as soon as they arrive, and UYVY is converted to RGB in a shader. A stalled receiver is replaced at once and the old one is torn down on a background thread.
+- **server/** is written in Go. It serves the web UI and API, starts and stops engine processes, and forwards browser previews without transcoding them: H.264 over WebRTC via [pion](https://github.com/pion/webrtc), with MJPEG as a fallback.
+- **frontend/** is the browser UI, built with Nuxt 3 and Vue 3.
 
 ## Requirements
 
-- Linux (x86_64 or arm64)
-- The NDI SDK runtime `libndi.so.6` (see [Install the NDI SDK](#install-the-ndi-sdk))
+- Linux on x86_64 or arm64
+- The NDI SDK runtime `libndi.so.6`, see [Install the NDI SDK](#install-the-ndi-sdk)
 - `avahi-daemon`, so that NDI sources can be discovered over mDNS
-- To build: Rust (stable, via [rustup](https://rustup.rs/)), Go 1.24 or newer, a C/C++ compiler, and the SDL2 and ALSA development headers
+- To build: stable Rust installed with [rustup](https://rustup.rs/), Go 1.24 or newer, a C/C++ compiler, and the SDL2 and ALSA development headers
 - To build the web UI: Node.js 20 or newer
 
 ```bash
@@ -48,7 +48,7 @@ $ sudo dnf install git curl gcc gcc-c++ pkgconf SDL2-devel alsa-lib-devel avahi
 
 The NDI SDK is licensed by Vizrt NDI AB and **must not be committed to this repository**. Each machine needs its own copy of the runtime library. moip-toolkit does not need the SDK to build: it loads `libndi.so.6` when it starts.
 
-Install it with the bundled script, which follows [DistroAV's `libndi-get.sh`](https://github.com/DistroAV/DistroAV/blob/master/CI/libndi-get.sh):
+Install it with the bundled script, which is based on [DistroAV's `libndi-get.sh`](https://github.com/DistroAV/DistroAV/blob/master/CI/libndi-get.sh):
 
 ```bash
 $ scripts/install-ndi-sdk.sh
@@ -58,16 +58,16 @@ The script:
 
 1. downloads the official installer from `https://downloads.ndi.tv/SDK/NDI_SDK_Linux/Install_NDI_SDK_v6_Linux.tar.gz`;
 2. shows the NDI SDK license and asks you to accept it;
-3. copies `libndi.so.6*` for your CPU (x86_64, or arm64 from `lib/aarch64-*`) to `/usr/local/lib` with `sudo`, registers that directory with `ldconfig` if the system does not already search it (Fedora / RHEL), and runs `ldconfig`.
+3. copies `libndi.so.6*` for your CPU to `/usr/local/lib` with `sudo`. On arm64 the library is taken from `lib/aarch64-*`. If the dynamic linker does not search that directory yet, as on Fedora and RHEL, the script registers it, then runs `ldconfig`.
 
 Options, set as environment variables:
 
 | Variable | Description |
 |---|---|
 | `PREFIX=/opt/ndi` | Install to `$PREFIX/lib` instead of `/usr/local/lib` |
-| `NDI_ACCEPT_LICENSE=yes` | Accept the license without the prompt. Only use this after you have read and accepted it, e.g. when setting up more machines |
+| `NDI_ACCEPT_LICENSE=yes` | Accept the license without the prompt. Only use this after you have read and accepted it, for example when setting up more machines |
 
-Check that the runtime is found (after [building](#build)):
+After [building](#build), check that the runtime is found:
 
 ```bash
 $ ./bin/moip version
@@ -81,11 +81,39 @@ If you would rather not install system-wide, point `NDI_RUNTIME_DIR_V6` at the d
 ```bash
 $ git clone https://github.com/TechnoTUT/moip-toolkit.git
 $ cd moip-toolkit
-$ make            # builds bin/moip (server and CLI) and bin/moip-engine
+$ make            # builds bin/moip, the server and CLI, and bin/moip-engine
 $ make frontend   # builds the web UI into frontend/.output/public
 ```
 
 `make test` runs the Rust and Go tests.
+
+## Display output
+
+RX, multiview and signage render straight to the display through KMS/DRM by default. Bypassing the desktop compositor saves one to two frames of latency. This needs:
+
+- no desktop session running on that display. `sudo systemctl set-default multi-user.target` makes the machine boot to a console instead of a GUI;
+- the user in the `video` group for the display and the `input` group for the Esc key: `sudo usermod -aG video,input $USER`.
+
+Output is always fullscreen, and `WAYLAND_DISPLAY` / `DISPLAY` are not needed.
+
+If KMS/DRM is not available because a desktop session owns the display, moip-toolkit prints a warning and opens a window on the desktop instead. To use the desktop from the start, pass `--video-driver auto`, `wayland` or `x11`.
+
+> [!TIP]
+> **Showing windows on a desktop when started over SSH**
+> A process started over SSH needs the desktop session's environment variables.
+>
+> 1. Check the session type:
+>    ```bash
+>    $ loginctl show-session $(loginctl | grep $(whoami) | awk '{print $1}') -p Type
+>    ```
+> 2. For `Type=wayland`:
+>    ```bash
+>    $ WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/$(id -u) ./bin/moip web --video-driver auto
+>    ```
+> 3. For `Type=x11`:
+>    ```bash
+>    $ DISPLAY=:0 XAUTHORITY=$HOME/.Xauthority ./bin/moip web --video-driver auto
+>    ```
 
 ## Usage
 
@@ -97,7 +125,7 @@ The `moip` command is the single entry point. `moip web` starts the server. The 
 $ ./bin/moip web --host 0.0.0.0 --port 8000
 ```
 
-- Browser UI: `http://<host>:8000/`
+- Open `http://<host>:8000/` in a browser.
 - The UI lets you discover sources, start and switch RX, start and stop TX, run multiview and signage, preview sources in the browser, and set presets with auto-start.
 - Settings are stored in `~/.config/utone-ndi/settings.json`. Signage images are stored in `data/signage/`; change the location with `--data`.
 
@@ -105,84 +133,61 @@ Useful flags:
 
 | Flag | Description |
 |---|---|
-| `--video-driver kmsdrm` | Display driver for RX, multiview and signage started from the UI (`auto`, `kmsdrm`, `wayland`, `x11`) |
+| `--video-driver kmsdrm` | Display driver for RX, multiview and signage started from the UI: `kmsdrm` by default, `auto`, `wayland` or `x11` |
 | `--extra-ips 10.0.0.5,10.0.0.6` | Query these hosts for sources directly, for networks without mDNS |
 | `--max-webrtc 4` | Maximum number of concurrent WebRTC previews |
 | `--static DIR` / `--engine PATH` | Override where the UI build and `moip-engine` are found |
 
-> [!TIP]
-> **Starting the server over SSH**
-> To show RX windows on the machine's own desktop, the server needs access to the display server.
->
-> 1. Check the session type:
->    ```bash
->    $ loginctl show-session $(loginctl | grep $(whoami) | awk '{print $1}') -p Type
->    ```
-> 2. Wayland (`Type=wayland`):
->    ```bash
->    $ WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/$(id -u) ./bin/moip web
->    ```
-> 3. X11 (`Type=x11`):
->    ```bash
->    $ DISPLAY=:0 XAUTHORITY=$HOME/.Xauthority ./bin/moip web
->    ```
->
-> None of this is needed with `--video-driver kmsdrm`.
-
 ### 2. Receive and display a source (RX)
 
 ```bash
-$ ./bin/moip rx -s "<NDI source name>" --fullscreen
+$ ./bin/moip rx -s "<NDI source name>"
 ```
 
-The source can be given as its full name (`HOST (STREAM)`) or as the stream name only. If you leave out `-s`, the network is searched and you pick a source from a list. Press `Esc` to quit.
+Give the source as its full name, `HOST (STREAM)`, or as the stream name only. If you leave out `-s`, the network is searched and you pick a source from a list. Press `Esc` to quit.
 
-> [!TIP]
-> **Lowest latency: direct KMS/DRM output**
-> On a dedicated RX machine, drawing straight to the display instead of through the desktop compositor (Wayland / X11) saves one to two frames of latency.
-> ```bash
-> $ ./bin/moip rx -s "<NDI source name>" --video-driver kmsdrm
-> $ ./bin/moip web --video-driver kmsdrm   # also applies to RX / multiview / signage started from the UI
-> ```
-> - No desktop session may be running on that display (console / TTY). `sudo systemctl set-default multi-user.target` makes the machine boot without a GUI.
-> - Add the user to the `video` (display) and `input` (Esc key) groups: `sudo usermod -aG video,input $USER`
-> - Output is always fullscreen, and `WAYLAND_DISPLAY` / `DISPLAY` are not needed.
+Other options:
 
-Other options: `--recv-fmt uyvy|rgb|bgr` (default `uyvy`: converted on the GPU, the fastest), `--recv-bandwidth highest|lowest`, `--banner-seconds` (how long the IP banner is shown).
+| Option | Description |
+|---|---|
+| `--recv-fmt uyvy` | Receive format: `uyvy`, the default and fastest because it is converted on the GPU, `rgb` or `bgr` |
+| `--recv-bandwidth highest` | `highest` or `lowest` |
+| `--banner-seconds 30` | How long the IP address banner is shown |
+| `--fullscreen` | Fullscreen window on a desktop. KMS/DRM output is always fullscreen |
 
 ### 3. Send a capture device (TX)
 
 ```bash
-$ ./bin/moip devices                      # list cameras / capture cards and audio inputs
+$ ./bin/moip devices      # list cameras, capture cards and audio inputs
 $ ./bin/moip tx -n TX -d 0 --width 1920 --height 1080 --fps 30 -a "plughw:CARD=PCH,DEV=0"
 $ ./bin/moip tx -n BARS -d -1 --fps 59.94 --no-audio   # colour bars with a clock
 ```
 
-- `-d` takes a V4L2 device index (`/dev/videoN`), a device path, or `-1` for the built-in test pattern.
+- `-d` takes a V4L2 device index for `/dev/videoN`, a device path, or `-1` for the built-in test pattern.
 - `--input-format auto|yuyv|uyvy|mjpg` picks the capture format. `auto` uses uncompressed video when the device can deliver the requested size and frame rate, and MJPEG otherwise.
 - Video is always sent as UYVY, NDI's native format. Audio comes from ALSA; `-a default` uses the system default input.
 
 ### 4. Multiview
 
 ```bash
-$ ./bin/moip multiview --fullscreen          # every source found, re-arranged as sources come and go
-$ ./bin/moip multiview -s CAM1 -s CAM2       # only these sources
+$ ./bin/moip multiview                   # every source found, re-arranged as sources come and go
+$ ./bin/moip multiview -s CAM1 -s CAM2   # only these sources
 ```
 
-Each tile shows the source name and L/R audio meters. With more than two tiles, the low-bandwidth NDI proxy streams are used to save CPU (`--recv-bandwidth highest` overrides this).
+Each tile shows the source name and L/R audio meters. With more than two tiles, the low-bandwidth NDI proxy streams are used to save CPU; `--recv-bandwidth highest` overrides this.
 
 ### 5. Digital signage
 
 Upload images in the web UI and show them fullscreen on the connected display, or show an image from the command line:
 
 ```bash
-$ ./bin/moip signage /path/to/image.png --fullscreen
-$ ./bin/moip signage /path/to/image.png --framebuffer   # Linux framebuffer, no GUI/GL needed
+$ ./bin/moip signage /path/to/image.png
+$ ./bin/moip signage /path/to/image.png --framebuffer   # Linux framebuffer, no GPU needed
 ```
 
-`--fb-device` selects the framebuffer device (default `/dev/fb0`). Writing to the framebuffer requires membership of the `video` group.
+`--fb-device` selects the framebuffer device, `/dev/fb0` by default. Writing to the framebuffer requires membership of the `video` group.
 
-## Autostart (systemd)
+## Autostart with systemd
 
 Example user units are in `systemd-example/`: `moip-rx.service`, `moip-tx.service` and `moip-web.service`. Edit `ExecStart` to match your setup.
 
@@ -208,36 +213,40 @@ All endpoints are under `/api`. Errors are returned as `{"detail": "..."}`.
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/events` | Server-Sent Events: the full state (`sources`, `rx`, `tx`, `multiview`, `signage`, `system`, `settings`), sent when it changes |
+| GET | `/api/events` | Server-Sent Events carrying the full state: `sources`, `rx`, `tx`, `multiview`, `signage`, `system` and `settings`. Sent when it changes |
 | GET | `/api/ndi/sources` | Sources found on the network |
 | GET | `/api/ndi/preview?source=&fps=&width=` | MJPEG preview |
-| POST | `/api/webrtc/offer` | WebRTC preview (`{source, sdp, type}` → SDP answer with an H.264 track) |
+| POST | `/api/webrtc/offer` | WebRTC preview: send `{source, sdp, type}`, receive an SDP answer with an H.264 track |
 | GET | `/api/devices/video`, `/api/devices/audio` | Capture devices |
 | GET/POST | `/api/rx/status`, `/api/rx/start`, `/api/rx/switch`, `/api/rx/stop` | Receiver |
 | GET/POST | `/api/tx/status`, `/api/tx/start`, `/api/tx/stop` | Sender |
 | GET/POST | `/api/multiview/status`, `/api/multiview/start`, `/api/multiview/stop` | Multiview |
-| GET/POST/DELETE | `/api/signage/...` | Signage images (`images`, `upload`, `image/{filename}`) and display (`start`, `stop`, `status`) |
+| GET/POST/DELETE | `/api/signage/images`, `/api/signage/upload`, `/api/signage/image/{filename}` | Signage images |
+| GET/POST | `/api/signage/status`, `/api/signage/start`, `/api/signage/stop` | Signage display |
 | GET/POST | `/api/system/status`, `/api/settings` | System load, presets and auto-start |
+
+RX, multiview and signage share the display, so starting one of them stops the others.
 
 ## Repository layout
 
 ```
 moip-toolkit/
 ├── engine/                 # Rust workspace
-│   ├── ndi/                # NDI SDK bindings (runtime-loaded, hand-written FFI)
+│   ├── ndi/                # NDI SDK bindings, loaded at run time
 │   └── moip-engine/src/
 │       ├── rx.rs           # fullscreen viewer
 │       ├── recv.rs         # capture thread, stall recovery, audio meter
 │       ├── gfx.rs          # SDL2/OpenGL window, UYVY shader, labels
-│       ├── tx.rs           # sender (V4L2 / test pattern + ALSA)
+│       ├── tx.rs           # sender: V4L2 or test pattern, plus ALSA
 │       ├── multiview.rs    # grid viewer
-│       ├── signage.rs      # image display (GL or framebuffer)
+│       ├── signage.rs      # image display on GL or the framebuffer
 │       ├── preview.rs      # H.264 / JPEG preview for the browser
 │       └── control.rs      # stdin/stdout JSON protocol with the server
 ├── server/                 # Go module
-│   ├── cmd/moip/           # moip command (web server + engine launcher)
-│   └── internal/           # api, jobs, preview (WebRTC/MJPEG), sources, settings, sysmon, engine
+│   ├── cmd/moip/           # moip command: web server and engine launcher
+│   └── internal/           # api, jobs, preview, sources, settings, sysmon, engine
 ├── frontend/               # Nuxt 3 / Vue 3 web UI
+├── scripts/                # install-ndi-sdk.sh
 ├── data/signage/           # uploaded signage images
 ├── systemd-example/        # example systemd user units
 └── Makefile
@@ -245,4 +254,4 @@ moip-toolkit/
 
 ## License
 
-MIT (see [LICENSE](LICENSE)). The NDI SDK and runtime are subject to the NDI SDK license and are not part of this repository. NDI® is a registered trademark of Vizrt NDI AB.
+moip-toolkit is released under the [MIT License](LICENSE). The NDI SDK and runtime are subject to the NDI SDK license and are not part of this repository. NDI® is a registered trademark of Vizrt NDI AB.
