@@ -12,6 +12,7 @@ mod devices;
 mod discover;
 mod font;
 mod gfx;
+mod multiview;
 mod recv;
 mod rx;
 mod tx;
@@ -48,6 +49,8 @@ enum Cmd {
     },
     /// Receive an NDI source and display it (fullscreen viewer).
     Rx(rx::Args),
+    /// Show several NDI sources in a grid.
+    Multiview(multiview::Args),
     /// List video (V4L2) and audio (ALSA) capture devices as JSON.
     Devices,
     /// Send a capture device (or colour bars) as an NDI source.
@@ -63,6 +66,7 @@ fn main() {
         }
         Cmd::Rx(args) => rx::run(args, cli.control),
         Cmd::Devices => devices::run(),
+        Cmd::Multiview(args) => multiview::run(args, cli.control),
         Cmd::Tx(args) => tx::run(args, cli.control),
     };
     if let Err(e) = result {
