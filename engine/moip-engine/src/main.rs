@@ -8,11 +8,13 @@
 mod audio;
 mod control;
 mod convert;
+mod devices;
 mod discover;
 mod font;
 mod gfx;
 mod recv;
 mod rx;
+mod tx;
 mod v4l2;
 
 use clap::{Parser, Subcommand};
@@ -46,6 +48,10 @@ enum Cmd {
     },
     /// Receive an NDI source and display it (fullscreen viewer).
     Rx(rx::Args),
+    /// List video (V4L2) and audio (ALSA) capture devices as JSON.
+    Devices,
+    /// Send a capture device (or colour bars) as an NDI source.
+    Tx(tx::Args),
 }
 
 fn main() {
@@ -56,6 +62,8 @@ fn main() {
             discover::run(discover::Args { once, timeout, extra_ips, control: cli.control })
         }
         Cmd::Rx(args) => rx::run(args, cli.control),
+        Cmd::Devices => devices::run(),
+        Cmd::Tx(args) => tx::run(args, cli.control),
     };
     if let Err(e) = result {
         if cli.control {
