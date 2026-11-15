@@ -4,9 +4,11 @@ After=network-online.target avahi-daemon.service
 Wants=network-online.target
 
 [Service]
+# RX / multiview / signage render straight to the display via KMS/DRM: no
+# desktop session on that display, and the user in the `video` and `input` groups.
 ExecStart=%h/moip-toolkit/bin/moip web --host 0.0.0.0 --port 8000
-# Lowest latency on a dedicated display machine (no desktop session; user in `video` and `input` groups):
-#ExecStart=%h/moip-toolkit/bin/moip web --host 0.0.0.0 --port 8000 --video-driver kmsdrm
+# To show them on a desktop session instead:
+#ExecStart=%h/moip-toolkit/bin/moip web --host 0.0.0.0 --port 8000 --video-driver auto
 WorkingDirectory=%h/moip-toolkit
 Restart=always
 RestartSec=3

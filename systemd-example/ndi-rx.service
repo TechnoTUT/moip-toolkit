@@ -4,9 +4,11 @@ After=network-online.target avahi-daemon.service
 Wants=network-online.target
 
 [Service]
-ExecStart=%h/moip-toolkit/bin/moip rx -s "__SOURCE_NAME__" --fullscreen
-# Lowest latency on a dedicated display machine (no desktop session; user in `video` and `input` groups):
-#ExecStart=%h/moip-toolkit/bin/moip rx -s "__SOURCE_NAME__" --video-driver kmsdrm
+# Renders straight to the display via KMS/DRM: no desktop session on that
+# display, and the user in the `video` and `input` groups.
+ExecStart=%h/moip-toolkit/bin/moip rx -s "__SOURCE_NAME__"
+# To show the viewer on a desktop session instead:
+#ExecStart=%h/moip-toolkit/bin/moip rx -s "__SOURCE_NAME__" --fullscreen --video-driver auto
 WorkingDirectory=%h/moip-toolkit
 Restart=always
 RestartSec=3
