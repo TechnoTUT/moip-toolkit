@@ -5,6 +5,7 @@
 //! `--control`, which reads JSON commands on stdin and writes JSON events on
 //! stdout (see `control.rs`).
 
+mod audio;
 mod control;
 mod discover;
 mod font;
