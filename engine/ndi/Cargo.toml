@@ -1,9 +1,0 @@
-[package]
-name = "ndi"
-version = "0.1.0"
-edition.workspace = true
-license.workspace = true
-description = "Minimal runtime-loaded bindings to the NDI SDK (libndi.so.6)"
-
-[dependencies]
-libloading = "0.8"

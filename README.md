@@ -11,7 +11,7 @@ It receives NDI sources and shows them fullscreen with minimal latency, sends ca
 flowchart TD
     browser["Browser<br/>Nuxt / Vue web UI"]
     server["<b>moip web</b><br/>Go server, server/"]
-    engine["<b>moip-engine</b><br/>Rust media engine, engine/<br/>rx · tx · multiview · signage · preview · discover · devices"]
+    engine["<b>moip-engine</b><br/>Rust media engine, engine/ (submodule)<br/>rx · tx · multiview · signage · preview · discover · devices"]
     ndi["libndi.so.6<br/>NDI SDK runtime<br/>installed separately, not in this repository"]
     display["Display<br/>KMS/DRM or desktop via SDL2 / OpenGL"]
     capture["Capture devices<br/>V4L2 video, ALSA audio"]
@@ -79,11 +79,13 @@ If you would rather not install system-wide, point `NDI_RUNTIME_DIR_V6` at the d
 ## Build
 
 ```bash
-$ git clone https://github.com/TechnoTUT/moip-toolkit.git
+$ git clone --recurse-submodules https://github.com/TechnoTUT/moip-toolkit.git
 $ cd moip-toolkit
 $ make            # builds bin/moip, the server and CLI, and bin/moip-engine
 $ make frontend   # builds the web UI into frontend/.output/public
 ```
+
+The engine lives in its own repository, [TechnoTUT/moip-engine](https://github.com/TechnoTUT/moip-engine), and is checked out at `engine/` as a git submodule. If you cloned without `--recurse-submodules`, run `git submodule update --init` first.
 
 `make test` runs the Rust and Go tests.
 
@@ -231,7 +233,7 @@ RX, multiview and signage share the display, so starting one of them stops the o
 
 ```
 moip-toolkit/
-├── engine/                 # Rust workspace
+├── engine/                 # Rust workspace (submodule: TechnoTUT/moip-engine)
 │   ├── ndi/                # NDI SDK bindings, loaded at run time
 │   └── moip-engine/src/
 │       ├── rx.rs           # fullscreen viewer
