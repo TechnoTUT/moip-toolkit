@@ -184,14 +184,14 @@ $ ./bin/moip signage /path/to/image.png --framebuffer   # Linux framebuffer, no 
 
 ## Autostart (systemd)
 
-Example user units are in `systemd-example/`: `ndi-rx.service`, `ndi-tx.service` and `ndi-web.service`. Edit `ExecStart` to match your setup.
+Example user units are in `systemd-example/`: `moip-rx.service`, `moip-tx.service` and `moip-web.service`. Edit `ExecStart` to match your setup.
 
 ```bash
 $ mkdir -p ~/.config/systemd/user
-$ cp systemd-example/ndi-rx.service ~/.config/systemd/user/
-$ vim ~/.config/systemd/user/ndi-rx.service
+$ cp systemd-example/moip-rx.service ~/.config/systemd/user/
+$ vim ~/.config/systemd/user/moip-rx.service
 $ systemctl --user daemon-reload
-$ systemctl --user enable --now ndi-rx.service
+$ systemctl --user enable --now moip-rx.service
 ```
 
 To start the units at boot without logging in, enable lingering:
@@ -200,7 +200,7 @@ To start the units at boot without logging in, enable lingering:
 $ sudo loginctl enable-linger $USER
 ```
 
-With `ndi-web.service`, you can instead turn on auto-start for RX / TX in the web UI's settings.
+With `moip-web.service`, you can instead turn on auto-start for RX / TX in the web UI's settings.
 
 ## REST API
 

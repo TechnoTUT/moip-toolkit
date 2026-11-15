@@ -184,14 +184,14 @@ $ ./bin/moip signage /path/to/image.png --framebuffer   # Linux フレームバ�
 
 ## 自動起動（systemd）
 
-`systemd-example/` にユーザーユニットの例（`ndi-rx.service`、`ndi-tx.service`、`ndi-web.service`）があります。`ExecStart` を環境に合わせて編集してください。
+`systemd-example/` にユーザーユニットの例（`moip-rx.service`、`moip-tx.service`、`moip-web.service`）があります。`ExecStart` を環境に合わせて編集してください。
 
 ```bash
 $ mkdir -p ~/.config/systemd/user
-$ cp systemd-example/ndi-rx.service ~/.config/systemd/user/
-$ vim ~/.config/systemd/user/ndi-rx.service
+$ cp systemd-example/moip-rx.service ~/.config/systemd/user/
+$ vim ~/.config/systemd/user/moip-rx.service
 $ systemctl --user daemon-reload
-$ systemctl --user enable --now ndi-rx.service
+$ systemctl --user enable --now moip-rx.service
 ```
 
 ログインせずに起動時から動かすには、lingerを有効にします。
@@ -200,7 +200,7 @@ $ systemctl --user enable --now ndi-rx.service
 $ sudo loginctl enable-linger $USER
 ```
 
-`ndi-web.service` を使う場合は、代わりにWeb UIの設定でRX / TXの自動起動を有効にすることもできます。
+`moip-web.service` を使う場合は、代わりにWeb UIの設定でRX / TXの自動起動を有効にすることもできます。
 
 ## REST API
 
