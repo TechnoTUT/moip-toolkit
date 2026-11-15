@@ -64,7 +64,27 @@ enum Cmd {
     Tx(tx::Args),
 }
 
+/// Make large allocations (video frames, a few MB each) always use mmap so
+/// they go back to the OS when freed.
+///
+/// glibc raises its mmap threshold dynamically after an mmapped block is
+/// freed; from then on frame-sized buffers come from the heap arenas, and
+/// every receiver re-creation leaves fragmented free memory behind that is
+/// never returned (RSS grew ~3 MB/min while switching sources, with live heap
+/// usage flat). A fixed threshold disables that adjustment.
+fn tune_malloc() {
+    if std::env::var_os("MOIP_NO_MALLOPT").is_some() {
+        return;
+    }
+    // SAFETY: plain glibc calls, made before any other thread exists.
+    unsafe {
+        libc::mallopt(libc::M_MMAP_THRESHOLD, 1 << 20);
+        libc::mallopt(libc::M_TRIM_THRESHOLD, 4 << 20);
+    }
+}
+
 fn main() {
+    tune_malloc();
     let cli = Cli::parse();
     let result = match cli.command {
         Cmd::Version => ndi::version().map(|v| println!("{v}")).map_err(Into::into),
