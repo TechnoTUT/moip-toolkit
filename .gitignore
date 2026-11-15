@@ -8,3 +8,7 @@ frontend/dist
 node_modules/
 data/signage/*
 !data/signage/.gitkeep
+# Build outputs
+engine/target/
+server/bin/
+bin/
