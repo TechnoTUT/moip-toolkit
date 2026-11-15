@@ -11,6 +11,7 @@ mod font;
 mod gfx;
 mod recv;
 mod rx;
+mod v4l2;
 
 use clap::{Parser, Subcommand};
 
