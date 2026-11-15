@@ -11,7 +11,7 @@ NDIソースを最小限の遅延で受信して全画面表示するほか、�
 flowchart TD
     browser["ブラウザ<br/>Nuxt / Vue の Web UI"]
     server["<b>moip web</b><br/>Go サーバー、server/"]
-    engine["<b>moip-engine</b><br/>Rust メディアエンジン、engine/<br/>rx · tx · multiview · signage · preview · discover · devices"]
+    engine["<b>moip-engine</b><br/>Rust メディアエンジン、engine/ (submodule)<br/>rx · tx · multiview · signage · preview · discover · devices"]
     ndi["libndi.so.6<br/>NDI SDK ランタイム<br/>別途インストール。リポジトリには含めない"]
     display["ディスプレイ<br/>KMS/DRM またはデスクトップに SDL2 / OpenGL で描画"]
     capture["キャプチャデバイス<br/>V4L2 の映像、ALSA の音声"]
@@ -79,11 +79,13 @@ NDI SDK LINUX ... 6.x.x
 ## ビルド
 
 ```bash
-$ git clone https://github.com/TechnoTUT/moip-toolkit.git
+$ git clone --recurse-submodules https://github.com/TechnoTUT/moip-toolkit.git
 $ cd moip-toolkit
 $ make            # サーバーとCLIの bin/moip、および bin/moip-engine をビルド
 $ make frontend   # Web UI を frontend/.output/public にビルド
 ```
+
+エンジンは別リポジトリ [TechnoTUT/moip-engine](https://github.com/TechnoTUT/moip-engine) にあり、git submodule として `engine/` に配置されます。`--recurse-submodules` を付けずにクローンした場合は、先に `git submodule update --init` を実行してください。
 
 `make test` でRustとGoのテストを実行できます。
 
@@ -231,7 +233,7 @@ RX・マルチビュー・サイネージはディスプレイを共有するた
 
 ```
 moip-toolkit/
-├── engine/                 # Rust ワークスペース
+├── engine/                 # Rust ワークスペース (submodule: TechnoTUT/moip-engine)
 │   ├── ndi/                # 実行時に読み込む NDI SDK バインディング
 │   └── moip-engine/src/
 │       ├── rx.rs           # 全画面ビューア

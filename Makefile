@@ -10,11 +10,15 @@ CARGO ?= cargo
 GO    ?= go
 NPM   ?= npm
 
-.PHONY: all engine server frontend test clean
+.PHONY: all engine server frontend test clean submodules
 
 all: engine server
 
-engine:
+# engine/ is a git submodule (TechnoTUT/moip-engine).
+submodules:
+	@test -f engine/Cargo.toml || git submodule update --init
+
+engine: submodules
 	$(CARGO) build --release --manifest-path engine/Cargo.toml
 	mkdir -p bin
 	cp engine/target/release/moip-engine bin/moip-engine
@@ -26,7 +30,7 @@ server:
 frontend:
 	cd frontend && $(NPM) ci && $(NPM) run build
 
-test:
+test: submodules
 	$(CARGO) test --manifest-path engine/Cargo.toml
 	cd server && $(GO) vet ./... && $(GO) test ./...
 
