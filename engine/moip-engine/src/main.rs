@@ -7,6 +7,7 @@
 
 mod audio;
 mod control;
+mod convert;
 mod discover;
 mod font;
 mod gfx;
