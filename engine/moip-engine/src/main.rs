@@ -15,6 +15,7 @@ mod gfx;
 mod multiview;
 mod recv;
 mod rx;
+mod signage;
 mod tx;
 mod v4l2;
 
@@ -53,6 +54,8 @@ enum Cmd {
     Multiview(multiview::Args),
     /// List video (V4L2) and audio (ALSA) capture devices as JSON.
     Devices,
+    /// Show a still image fullscreen (digital signage).
+    Signage(signage::Args),
     /// Send a capture device (or colour bars) as an NDI source.
     Tx(tx::Args),
 }
@@ -67,6 +70,7 @@ fn main() {
         Cmd::Rx(args) => rx::run(args, cli.control),
         Cmd::Devices => devices::run(),
         Cmd::Multiview(args) => multiview::run(args, cli.control),
+        Cmd::Signage(args) => signage::run(args, cli.control),
         Cmd::Tx(args) => tx::run(args, cli.control),
     };
     if let Err(e) = result {
