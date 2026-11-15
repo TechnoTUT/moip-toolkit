@@ -1,0 +1,21 @@
+[package]
+name = "moip-engine"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "moip-toolkit media engine: NDI receive/display, send, multiview, signage and preview"
+
+[dependencies]
+ndi = { path = "../ndi" }
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sdl2 = "0.38"
+glow = "0.16"
+libc = "0.2"
+alsa = "0.9"
+zune-jpeg = "0.4"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp"] }
+openh264 = "0.9"
+jpeg-encoder = "0.6"

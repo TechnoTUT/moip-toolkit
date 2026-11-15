@@ -2,178 +2,256 @@
 
 **English** | [日本語](README.ja.md)
 
-By using NDI, this toolkit moves video transport for the DJ event "The Utopia Tone" onto an IP network.  
-It receives NDI sources and displays them fullscreen using Python and SDL2, and sends NDI sources using OpenCV. It also supports remote control through a Web API built with FastAPI and a browser UI.
+moip-toolkit moves the video transport of the DJ event "The Utopia Tone" onto an IP network using [NDI](https://ndi.video/).
+It receives NDI sources and shows them fullscreen with minimal latency, sends capture devices as NDI sources, shows several sources in a multiview grid, and displays still images as digital signage. Everything can be controlled from a browser UI or a REST API.
 
-## Getting Started
-Python 3, avahi-daemon, libgl1-mesa-dev and portaudio19-dev are required.
-Install the required packages with the following commands.
-```bash
-# Debian/Ubuntu
-$ sudo apt install git curl avahi-daemon libgl1-mesa-dev portaudio19-dev
-# Fedora
-$ sudo dnf install git curl avahi mesa-libGL-devel portaudio-devel
-$ curl -LsSf https://astral.sh/uv/install.sh | sh
+## Architecture
+
+```mermaid
+flowchart TD
+    browser["Browser<br/>Nuxt / Vue web UI"]
+    server["<b>moip web</b><br/>Go server, server/"]
+    engine["<b>moip-engine</b><br/>Rust media engine, engine/<br/>rx · tx · multiview · signage · preview · discover · devices"]
+    ndi["libndi.so.6<br/>NDI SDK runtime<br/>installed separately, not in this repository"]
+    display["Display<br/>KMS/DRM or desktop via SDL2 / OpenGL"]
+    capture["Capture devices<br/>V4L2 video, ALSA audio"]
+    lan["NDI sources and receivers on the LAN"]
+
+    browser -- "HTTP · Server-Sent Events · MJPEG · WebRTC" --> server
+    server -- "JSON lines over stdin/stdout<br/>one process per job" --> engine
+    engine -- "dlopen at run time" --> ndi
+    ndi <-- "NDI" --> lan
+    engine --> display
+    capture --> engine
 ```
 
-Next, clone the repository, create a virtual environment and install the dependencies.
+- **engine/** is written in Rust and does all the media work. It calls the NDI SDK directly, so there is no interpreter lock and no framesync buffering in the receive path: frames are uploaded to the GPU as soon as they arrive, and UYVY is converted to RGB in a shader. A stalled receiver is replaced at once and the old one is torn down on a background thread.
+- **server/** is written in Go. It serves the web UI and API, starts and stops engine processes, and forwards browser previews without transcoding them: H.264 over WebRTC via [pion](https://github.com/pion/webrtc), with MJPEG as a fallback.
+- **frontend/** is the browser UI, built with Nuxt 3 and Vue 3.
+
+## Requirements
+
+- Linux on x86_64 or arm64
+- The NDI SDK runtime `libndi.so.6`, see [Install the NDI SDK](#install-the-ndi-sdk)
+- `avahi-daemon`, so that NDI sources can be discovered over mDNS
+- To build: stable Rust installed with [rustup](https://rustup.rs/), Go 1.24 or newer, a C/C++ compiler, and the SDL2 and ALSA development headers
+- To build the web UI: Node.js 20 or newer
+
+```bash
+# Debian / Ubuntu
+$ sudo apt install git curl build-essential pkg-config libsdl2-dev libasound2-dev avahi-daemon
+# Fedora
+$ sudo dnf install git curl gcc gcc-c++ pkgconf SDL2-devel alsa-lib-devel avahi
+```
+
+## Install the NDI SDK
+
+The NDI SDK is licensed by Vizrt NDI AB and **must not be committed to this repository**. Each machine needs its own copy of the runtime library. moip-toolkit does not need the SDK to build: it loads `libndi.so.6` when it starts.
+
+Install it with the bundled script, which is based on [DistroAV's `libndi-get.sh`](https://github.com/DistroAV/DistroAV/blob/master/CI/libndi-get.sh):
+
+```bash
+$ scripts/install-ndi-sdk.sh
+```
+
+The script:
+
+1. downloads the official installer from `https://downloads.ndi.tv/SDK/NDI_SDK_Linux/Install_NDI_SDK_v6_Linux.tar.gz`;
+2. shows the NDI SDK license and asks you to accept it;
+3. copies `libndi.so.6*` for your CPU to `/usr/local/lib` with `sudo`. On arm64 the library is taken from `lib/aarch64-*`. If the dynamic linker does not search that directory yet, as on Fedora and RHEL, the script registers it, then runs `ldconfig`.
+
+Options, set as environment variables:
+
+| Variable | Description |
+|---|---|
+| `PREFIX=/opt/ndi` | Install to `$PREFIX/lib` instead of `/usr/local/lib` |
+| `NDI_ACCEPT_LICENSE=yes` | Accept the license without the prompt. Only use this after you have read and accepted it, for example when setting up more machines |
+
+After [building](#build), check that the runtime is found:
+
+```bash
+$ ./bin/moip version
+NDI SDK LINUX ... 6.x.x
+```
+
+If you would rather not install system-wide, point `NDI_RUNTIME_DIR_V6` at the directory that contains `libndi.so.6`.
+
+## Build
+
 ```bash
 $ git clone https://github.com/TechnoTUT/moip-toolkit.git
 $ cd moip-toolkit
-$ uv venv
-$ uv pip install -r requirements.txt
+$ make            # builds bin/moip, the server and CLI, and bin/moip-engine
+$ make frontend   # builds the web UI into frontend/.output/public
 ```
 
----
+`make test` runs the Rust and Go tests.
 
-## Commands
+## Display output
 
-The unified CLI `main.py` runs the `rx` / `tx` / `multiview` / `signage` / `web` features from a single entry point.
+RX, multiview and signage render straight to the display through KMS/DRM by default. Bypassing the desktop compositor saves one to two frames of latency. This needs:
 
-### 1. Web API / Browser UI
-Once the frontend is built, you can discover NDI sources, switch the receiver (RX), and start/stop the transmitter (TX) from your browser.
+- no desktop session running on that display. `sudo systemctl set-default multi-user.target` makes the machine boot to a console instead of a GUI;
+- the user in the `video` group for the display and the `input` group for the Esc key: `sudo usermod -aG video,input $USER`.
 
-#### Building the UI
-```bash
-$ cd frontend
-$ npm install
-$ npm run build
-$ cd ..
-```
+Output is always fullscreen, and `WAYLAND_DISPLAY` / `DISPLAY` are not needed.
 
-#### Starting the server
-```bash
-$ uv run main.py web --host 0.0.0.0 --port 8000
-```
-- Browser UI: `http://localhost:8000/`
-- API docs (Swagger UI): `http://localhost:8000/docs`
+If KMS/DRM is not available because a desktop session owns the display, moip-toolkit prints a warning and opens a window on the desktop instead. To use the desktop from the start, pass `--video-driver auto`, `wayland` or `x11`.
 
 > [!TIP]
-> **Environment variables when starting from SSH or a remote connection**  
-> To show the RX window on the physical display from a server started over SSH, you need environment variables that give access to the display server (Wayland / X11).
+> **Showing windows on a desktop when started over SSH**
+> A process started over SSH needs the desktop session's environment variables.
 >
-> 1. **Check the session type**:
+> 1. Check the session type:
 >    ```bash
 >    $ loginctl show-session $(loginctl | grep $(whoami) | awk '{print $1}') -p Type
 >    ```
-> 2. **On Wayland** (`Type=wayland`):
+> 2. For `Type=wayland`:
 >    ```bash
->    $ WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/$(id -u) uv run main.py web --host 0.0.0.0 --port 8000
+>    $ WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/$(id -u) ./bin/moip web --video-driver auto
 >    ```
-> 3. **On X11** (`Type=x11`):
+> 3. For `Type=x11`:
 >    ```bash
->    $ DISPLAY=:0 XAUTHORITY=$HOME/.Xauthority uv run main.py web --host 0.0.0.0 --port 8000
+>    $ DISPLAY=:0 XAUTHORITY=$HOME/.Xauthority ./bin/moip web --video-driver auto
 >    ```
 
-### 2. Receive and display an NDI source fullscreen (RX)
+## Usage
+
+The `moip` command is the single entry point. `moip web` starts the server. The other subcommands run the media engine directly, and each one accepts `-h` to list its options.
+
+### 1. Web UI / REST API
+
 ```bash
-$ uv run main.py rx -s "<NDI Source Name>" --fullscreen
+$ ./bin/moip web --host 0.0.0.0 --port 8000
 ```
-If `<NDI Source Name>` is omitted, the NDI sources on the network are discovered automatically and you can pick one from an interactive menu.
 
-> [!TIP]
-> **Low-latency display (direct KMS/DRM output)**  
-> On a dedicated RX machine, drawing directly to the display without going through the desktop compositor (Wayland / X11) cuts 1–2 frames of latency.
-> ```bash
-> $ uv run main.py rx -s "<NDI Source Name>" --video-driver kmsdrm
-> $ uv run main.py web --video-driver kmsdrm   # Also applies to RX / multiview launched from the Web UI
-> ```
-> - No desktop session may be running on that display (console / TTY state). `sudo systemctl set-default multi-user.target` makes the machine boot without a GUI.
-> - Add the user running it to the `video` (display) and `input` (ESC key) groups: `sudo usermod -aG video,input $USER`
-> - Output is always fullscreen. You do not need to set `WAYLAND_DISPLAY` / `DISPLAY`.
+- Open `http://<host>:8000/` in a browser.
+- The UI lets you discover sources, start and switch RX, start and stop TX, run multiview and signage, preview sources in the browser, and set presets with auto-start.
+- Settings are stored in `~/.config/utone-ndi/settings.json`. Signage images are stored in `data/signage/`; change the location with `--data`.
 
-*(Note: when launching `rx` directly over SSH, the `WAYLAND_DISPLAY` or `DISPLAY` environment variable is also required, as above.)*
+Useful flags:
 
-### 3. Send an NDI source (TX)
+| Flag | Description |
+|---|---|
+| `--video-driver kmsdrm` | Display driver for RX, multiview and signage started from the UI: `kmsdrm` by default, `auto`, `wayland` or `x11` |
+| `--extra-ips 10.0.0.5,10.0.0.6` | Query these hosts for sources directly, for networks without mDNS |
+| `--max-webrtc 4` | Maximum number of concurrent WebRTC previews |
+| `--static DIR` / `--engine PATH` | Override where the UI build and `moip-engine` are found |
+
+### 2. Receive and display a source (RX)
+
 ```bash
-$ uv run main.py tx
+$ ./bin/moip rx -s "<NDI source name>"
 ```
-List the connected camera and microphone devices:
+
+Give the source as its full name, `HOST (STREAM)`, or as the stream name only. If you leave out `-s`, the network is searched and you pick a source from a list. Press `Esc` to quit.
+
+Other options:
+
+| Option | Description |
+|---|---|
+| `--recv-fmt uyvy` | Receive format: `uyvy`, the default and fastest because it is converted on the GPU, `rgb` or `bgr` |
+| `--recv-bandwidth highest` | `highest` or `lowest` |
+| `--banner-seconds 30` | How long the IP address banner is shown |
+| `--fullscreen` | Fullscreen window on a desktop. KMS/DRM output is always fullscreen |
+
+### 3. Send a capture device (TX)
+
 ```bash
-$ uv run main.py tx --list-devices
+$ ./bin/moip devices      # list cameras, capture cards and audio inputs
+$ ./bin/moip tx -n TX -d 0 --width 1920 --height 1080 --fps 30 -a "plughw:CARD=PCH,DEV=0"
+$ ./bin/moip tx -n BARS -d -1 --fps 59.94 --no-audio   # colour bars with a clock
 ```
 
-### 4. Multi-viewer (Multiview)
-Monitor multiple NDI sources at once in an auto-arranged grid.
+- `-d` takes a V4L2 device index for `/dev/videoN`, a device path, or `-1` for the built-in test pattern.
+- `--input-format auto|yuyv|uyvy|mjpg` picks the capture format. `auto` uses uncompressed video when the device can deliver the requested size and frame rate, and MJPEG otherwise.
+- Video is always sent as UYVY, NDI's native format. Audio comes from ALSA; `-a default` uses the system default input.
+
+### 4. Multiview
+
 ```bash
-$ uv run main.py multiview --fullscreen
-$ uv run main.py multiview -s CAM1 -s CAM2   # Only the specified sources
+$ ./bin/moip multiview                   # every source found, re-arranged as sources come and go
+$ ./bin/moip multiview -s CAM1 -s CAM2   # only these sources
 ```
-If `-s` is omitted, all discovered sources are shown.
 
-### 5. Digital Signage
-Upload an image from the Web UI and show it fullscreen directly on a connected display.  
-You can also specify an image file from the CLI and show it fullscreen:
+Each tile shows the source name and L/R audio meters. With more than two tiles, the low-bandwidth NDI proxy streams are used to save CPU; `--recv-bandwidth highest` overrides this.
+
+### 5. Digital signage
+
+Upload images in the web UI and show them fullscreen on the connected display, or show an image from the command line:
+
 ```bash
-$ uv run main.py signage -i /path/to/image.png --fullscreen
-```
-*(Note: if `-i` is omitted, the most recent image uploaded via the Web UI is shown.)*
-
-#### Display on a CLI environment (TTY)
-The `--framebuffer` option draws directly to the Linux framebuffer (`/dev/fb0`) instead of using SDL2/OpenGL. This works without a GUI, such as over SSH or on a console (TTY).
-```bash
-$ uv run main.py signage -i /path/to/image.png --framebuffer
-```
-- Use `--fb-device` to change the framebuffer device path (default: `/dev/fb0`).
-- Writing to the framebuffer may require root privileges.
-
----
-
-## Directory Structure
-```
-moip-toolkit/
-├── core/                   # Low-level shared core logic
-│   ├── rx.py               # SDL2 init, OpenGL rendering, frame sync, NDI receive definitions
-│   ├── reconnecting_receiver.py # NDI receiver with reconnect / stall-recovery handling
-│   ├── tx.py               # Camera capture thread, video/audio NDI send threads
-│   ├── multiview.py        # Multi-NDI grid display logic
-│   └── signage.py          # Image signage rendering via SDL2/OpenGL or the Linux framebuffer
-├── cli/                    # Command-line UI definitions
-│   ├── menu.py             # Interactive NDI source selection menu
-│   ├── rx_cmd.py           # rx command definition
-│   ├── tx_cmd.py           # tx command definition
-│   ├── multiview_cmd.py    # multiview command definition
-│   └── signage_cmd.py      # signage command definition
-├── backend/                # FastAPI Web API & process control
-│   ├── models.py           # Pydantic schemas
-│   ├── ndi_scanner.py      # Automatic NDI source discovery service
-│   ├── devices.py          # Camera / audio device detection
-│   ├── rx_runner.py        # RX process controller
-│   ├── tx_runner.py        # TX process controller
-│   ├── multiview_runner.py # Multiview process controller
-│   ├── signage_runner.py   # Signage process controller
-│   ├── webrtc_manager.py   # Low-latency WebRTC preview manager
-│   ├── preview_manager.py  # On-demand MJPEG preview streamer
-│   ├── settings.py         # Persistent server settings (JSON)
-│   ├── system_monitor.py   # Lightweight system resource monitor
-│   └── main.py             # REST API endpoints
-├── data/
-│   └── signage/            # Storage for uploaded signage images
-├── frontend/               # Nuxt 3 / Vue 3 admin web dashboard
-├── main.py                 # Unified CLI entry point (rx / tx / multiview / signage / web)
-├── requirements.txt
-└── systemd-example/        # Example systemd unit files
+$ ./bin/moip signage /path/to/image.png
+$ ./bin/moip signage /path/to/image.png --framebuffer   # Linux framebuffer, no GPU needed
 ```
 
----
+`--fb-device` selects the framebuffer device, `/dev/fb0` by default. Writing to the framebuffer requires membership of the `video` group.
 
-## Autostart (systemd)
-To start automatically with systemd, follow the steps below. This also works on environments without a GUI.  
-Set the `ExecStart` and `WorkingDirectory` paths to match your environment.  
-Unit files for TX (`ndi-tx.service`) and the Web UI (`ndi-web.service`) are also provided in `systemd-example/`.
+## Autostart with systemd
+
+Example user units are in `systemd-example/`: `moip-rx.service`, `moip-tx.service` and `moip-web.service`. Edit `ExecStart` to match your setup.
+
 ```bash
 $ mkdir -p ~/.config/systemd/user
-$ cp systemd-example/ndi-rx.service ~/.config/systemd/user/
-$ vim ~/.config/systemd/user/ndi-rx.service
-```
-
-Enable autostart.
-```bash
+$ cp systemd-example/moip-rx.service ~/.config/systemd/user/
+$ vim ~/.config/systemd/user/moip-rx.service
 $ systemctl --user daemon-reload
-$ systemctl --user enable --now ndi-rx.service
+$ systemctl --user enable --now moip-rx.service
 ```
 
-To start automatically at boot without logging in, enable linger.
+To start the units at boot without logging in, enable lingering:
+
 ```bash
-$ sudo loginctl enable-linger username
+$ sudo loginctl enable-linger $USER
 ```
+
+With `moip-web.service`, you can instead turn on auto-start for RX / TX in the web UI's settings.
+
+## REST API
+
+All endpoints are under `/api`. Errors are returned as `{"detail": "..."}`.
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/events` | Server-Sent Events carrying the full state: `sources`, `rx`, `tx`, `multiview`, `signage`, `system` and `settings`. Sent when it changes |
+| GET | `/api/ndi/sources` | Sources found on the network |
+| GET | `/api/ndi/preview?source=&fps=&width=` | MJPEG preview |
+| POST | `/api/webrtc/offer` | WebRTC preview: send `{source, sdp, type}`, receive an SDP answer with an H.264 track |
+| GET | `/api/devices/video`, `/api/devices/audio` | Capture devices |
+| GET/POST | `/api/rx/status`, `/api/rx/start`, `/api/rx/switch`, `/api/rx/stop` | Receiver |
+| GET/POST | `/api/tx/status`, `/api/tx/start`, `/api/tx/stop` | Sender |
+| GET/POST | `/api/multiview/status`, `/api/multiview/start`, `/api/multiview/stop` | Multiview |
+| GET/POST/DELETE | `/api/signage/images`, `/api/signage/upload`, `/api/signage/image/{filename}` | Signage images |
+| GET/POST | `/api/signage/status`, `/api/signage/start`, `/api/signage/stop` | Signage display |
+| GET/POST | `/api/system/status`, `/api/settings` | System load, presets and auto-start |
+
+RX, multiview and signage share the display, so starting one of them stops the others.
+
+## Repository layout
+
+```
+moip-toolkit/
+├── engine/                 # Rust workspace
+│   ├── ndi/                # NDI SDK bindings, loaded at run time
+│   └── moip-engine/src/
+│       ├── rx.rs           # fullscreen viewer
+│       ├── recv.rs         # capture thread, stall recovery, audio meter
+│       ├── gfx.rs          # SDL2/OpenGL window, UYVY shader, labels
+│       ├── tx.rs           # sender: V4L2 or test pattern, plus ALSA
+│       ├── multiview.rs    # grid viewer
+│       ├── signage.rs      # image display on GL or the framebuffer
+│       ├── preview.rs      # H.264 / JPEG preview for the browser
+│       └── control.rs      # stdin/stdout JSON protocol with the server
+├── server/                 # Go module
+│   ├── cmd/moip/           # moip command: web server and engine launcher
+│   └── internal/           # api, jobs, preview, sources, settings, sysmon, engine
+├── frontend/               # Nuxt 3 / Vue 3 web UI
+├── scripts/                # install-ndi-sdk.sh
+├── data/signage/           # uploaded signage images
+├── systemd-example/        # example systemd user units
+└── Makefile
+```
+
+## License
+
+moip-toolkit is released under the [MIT License](LICENSE). The NDI SDK and runtime are subject to the NDI SDK license and are not part of this repository. NDI® is a registered trademark of Vizrt NDI AB.

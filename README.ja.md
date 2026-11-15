@@ -2,177 +2,256 @@
 
 [English](README.md) | **日本語**
 
-NDIを活用することでDJイベント "The Utopia Tone" の映像伝送をIPネットワーク上に移行します。  
-PythonとSDL2を使用してNDIソースを受信し全画面表示を行ったり、OpenCVを使用してNDIソースの送信を行います。また、FastAPIによるWeb APIおよびブラウザUIからの遠隔操作に対応しています。
+[NDI](https://ndi.video/) を活用することで、DJイベント "The Utopia Tone" の映像伝送をIPネットワーク上に移行します。
+NDIソースを最小限の遅延で受信して全画面表示するほか、キャプチャデバイスのNDI送信、複数ソースのマルチビュー表示、静止画のデジタルサイネージ表示ができます。いずれもブラウザUIやREST APIから遠隔操作できます。
 
-## 使い方
-動作にはPython3及びavahi-daemon、libgl1-mesa-dev、portaudio19-devが必要です。
-以下のコマンドで必要なパッケージをインストールしてください。
-```bash
-# Debian/Ubuntu
-$ sudo apt install git curl avahi-daemon libgl1-mesa-dev portaudio19-dev
-# Fedora
-$ sudo dnf install git curl avahi mesa-libGL-devel portaudio-devel
-$ curl -LsSf https://astral.sh/uv/install.sh | sh
+## アーキテクチャ
+
+```mermaid
+flowchart TD
+    browser["ブラウザ<br/>Nuxt / Vue の Web UI"]
+    server["<b>moip web</b><br/>Go サーバー、server/"]
+    engine["<b>moip-engine</b><br/>Rust メディアエンジン、engine/<br/>rx · tx · multiview · signage · preview · discover · devices"]
+    ndi["libndi.so.6<br/>NDI SDK ランタイム<br/>別途インストール。リポジトリには含めない"]
+    display["ディスプレイ<br/>KMS/DRM またはデスクトップに SDL2 / OpenGL で描画"]
+    capture["キャプチャデバイス<br/>V4L2 の映像、ALSA の音声"]
+    lan["LAN 上の NDI ソース / 受信機"]
+
+    browser -- "HTTP · Server-Sent Events · MJPEG · WebRTC" --> server
+    server -- "標準入出力の JSON Lines<br/>ジョブごとに 1 プロセス" --> engine
+    engine -- "実行時に dlopen" --> ndi
+    ndi <-- "NDI" --> lan
+    engine --> display
+    capture --> engine
 ```
 
-次に、リポジトリをクローンし、仮想環境を作成して依存関係をインストールします。
+- **engine/** はRustで書かれており、映像・音声処理をすべて担当します。NDI SDKを直接呼び出すので、インタプリタのロックも、受信経路でのFrameSyncによるバッファリングもありません。届いたフレームはすぐにGPUへ転送し、UYVY→RGBの変換はシェーダで行います。止まった受信機はその場で新しいものに差し替え、古いものはバックグラウンドのスレッドで破棄します。
+- **server/** はGoで書かれています。Web UIとAPIを提供し、エンジンのプロセスを起動・停止します。ブラウザ向けのプレビューは再エンコードせずに中継します。[pion](https://github.com/pion/webrtc) によるWebRTCでH.264を送り、MJPEGをフォールバックにしています。
+- **frontend/** はNuxt 3とVue 3で作られたブラウザUIです。
+
+## 必要なもの
+
+- x86_64 または arm64 の Linux
+- NDI SDK のランタイム `libndi.so.6`。[NDI SDK のインストール](#ndi-sdk-のインストール)を参照してください
+- mDNSでNDIソースを検出するための `avahi-daemon`
+- ビルドに必要なもの：[rustup](https://rustup.rs/) で入れたstable版のRust、Go 1.24以上、C/C++コンパイラ、SDL2とALSAの開発用ヘッダ
+- Web UIのビルドに必要なもの：Node.js 20以上
+
+```bash
+# Debian / Ubuntu
+$ sudo apt install git curl build-essential pkg-config libsdl2-dev libasound2-dev avahi-daemon
+# Fedora
+$ sudo dnf install git curl gcc gcc-c++ pkgconf SDL2-devel alsa-lib-devel avahi
+```
+
+## NDI SDK のインストール
+
+NDI SDKはVizrt NDI ABのライセンスで提供されているため、**このリポジトリにコミットしないでください**。ランタイムライブラリは、各マシンにそれぞれインストールします。moip-toolkitは起動時に `libndi.so.6` を読み込むので、ビルド自体にSDKは不要です。
+
+同梱のスクリプトでインストールします。このスクリプトは [DistroAV の `libndi-get.sh`](https://github.com/DistroAV/DistroAV/blob/master/CI/libndi-get.sh) をもとにしています。
+
+```bash
+$ scripts/install-ndi-sdk.sh
+```
+
+スクリプトが行うこと：
+
+1. 公式のインストーラを `https://downloads.ndi.tv/SDK/NDI_SDK_Linux/Install_NDI_SDK_v6_Linux.tar.gz` からダウンロードします。
+2. NDI SDKのライセンスを表示し、同意を求めます。
+3. CPUに合った `libndi.so.6*` を `sudo` で `/usr/local/lib` にコピーします。arm64では `lib/aarch64-*` のものを使います。FedoraやRHELのように、そのディレクトリがリンカの検索対象になっていない場合は登録し、最後に `ldconfig` を実行します。
+
+環境変数で指定できるオプション：
+
+| 変数 | 説明 |
+|---|---|
+| `PREFIX=/opt/ndi` | `/usr/local/lib` の代わりに `$PREFIX/lib` にインストールする |
+| `NDI_ACCEPT_LICENSE=yes` | 確認なしでライセンスに同意する。既にライセンスを読んで同意している場合だけ使ってください。複数台をセットアップするときなどに使います |
+
+[ビルド](#ビルド)の後、ランタイムが見つかることを確認します。
+
+```bash
+$ ./bin/moip version
+NDI SDK LINUX ... 6.x.x
+```
+
+システム全体にインストールしたくない場合は、`NDI_RUNTIME_DIR_V6` に `libndi.so.6` のあるディレクトリを指定してください。
+
+## ビルド
+
 ```bash
 $ git clone https://github.com/TechnoTUT/moip-toolkit.git
 $ cd moip-toolkit
-$ uv venv
-$ uv pip install -r requirements.txt
+$ make            # サーバーとCLIの bin/moip、および bin/moip-engine をビルド
+$ make frontend   # Web UI を frontend/.output/public にビルド
 ```
 
----
+`make test` でRustとGoのテストを実行できます。
 
-## 起動コマンド
+## 表示の出力先
 
-統合CLI `main.py` から `rx` / `tx` / `multiview` / `signage` / `web` の各機能を統一的に実行できます。
+RX・マルチビュー・サイネージは、デフォルトでKMS/DRMを使ってディスプレイに直接描画します。デスクトップのコンポジタを経由しないので、1〜2フレーム分の遅延を減らせます。必要な条件は次のとおりです。
 
-### 1. Web API / ブラウザUI
-フロントエンドをビルドすることで、ブラウザからNDIソース探索、受信（RX）切り替え、送信（TX）開始・停止を直感的に操作できます。
+- そのディスプレイでデスクトップセッションが動いていないこと。`sudo systemctl set-default multi-user.target` でGUIを起動せずコンソールで起動する設定にできます。
+- 実行ユーザーが、画面用の `video` グループとEscキー用の `input` グループに入っていること：`sudo usermod -aG video,input $USER`
 
-#### UIのビルド
-```bash
-$ cd frontend
-$ npm install
-$ npm run build
-$ cd ..
-```
+出力は常に全画面になり、`WAYLAND_DISPLAY` / `DISPLAY` の指定は不要です。
 
-#### サーバー起動
-```bash
-$ uv run main.py web --host 0.0.0.0 --port 8000
-```
-- ブラウザ操作画面: `http://localhost:8000/`
-- APIドキュメント（Swagger UI）: `http://localhost:8000/docs`
+デスクトップセッションがディスプレイを使っていてKMS/DRMが使えない場合は、警告を出してデスクトップ上にウィンドウを開きます。最初からデスクトップを使う場合は、`--video-driver auto`、`wayland`、`x11` のいずれかを指定してください。
 
 > [!TIP]
-> **SSH やリモート接続から起動する場合の環境変数**  
-> SSH 経由で起動したサーバーから実機のディスプレイに RX ウィンドウを表示する場合、ディスプレイサーバー（Wayland / X11）へのアクセス環境変数が必要です。
+> **SSH 経由で起動してデスクトップにウィンドウを表示する場合**
+> SSH経由で起動したプロセスには、デスクトップセッションの環境変数が必要です。
 >
-> 1. **セッション種別の確認方法**:
+> 1. セッションの種類を確認します。
 >    ```bash
 >    $ loginctl show-session $(loginctl | grep $(whoami) | awk '{print $1}') -p Type
 >    ```
-> 2. **Wayland 環境の場合** (`Type=wayland`):
+> 2. `Type=wayland` の場合：
 >    ```bash
->    $ WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/$(id -u) uv run main.py web --host 0.0.0.0 --port 8000
+>    $ WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/$(id -u) ./bin/moip web --video-driver auto
 >    ```
-> 3. **X11 環境の場合** (`Type=x11`):
+> 3. `Type=x11` の場合：
 >    ```bash
->    $ DISPLAY=:0 XAUTHORITY=$HOME/.Xauthority uv run main.py web --host 0.0.0.0 --port 8000
+>    $ DISPLAY=:0 XAUTHORITY=$HOME/.Xauthority ./bin/moip web --video-driver auto
 >    ```
 
-### 2. NDIソースの受信・全画面表示 (RX)
+## 使い方
+
+`moip` コマンドが唯一の入口です。`moip web` でサーバーを起動します。それ以外のサブコマンドはメディアエンジンを直接実行します。各サブコマンドに `-h` を付けると、オプションの一覧を表示できます。
+
+### 1. Web UI / REST API
+
 ```bash
-$ uv run main.py rx -s "<NDI Source Name>" --fullscreen
+$ ./bin/moip web --host 0.0.0.0 --port 8000
 ```
-`<NDI Source Name>`を省略した場合は、ネットワーク上のNDIソースを自動検索し、対話式メニューから選択して起動できます。
 
-> [!TIP]
-> **低遅延で表示する (KMS/DRM 直接出力)**  
-> RX専用機では、デスクトップ（Wayland / X11 のコンポジタ）を経由せずにディスプレイへ直接描画することで、1〜2フレーム分の遅延を削減できます。
-> ```bash
-> $ uv run main.py rx -s "<NDI Source Name>" --video-driver kmsdrm
-> $ uv run main.py web --video-driver kmsdrm   # Web UI から起動する RX / マルチビューにも適用
-> ```
-> - そのディスプレイでデスクトップセッションが動いていないこと（コンソール / TTY 状態）が必要です。`sudo systemctl set-default multi-user.target` で GUI を起動しない設定にできます。
-> - 実行ユーザーを `video`（画面）と `input`（ESCキー）グループに追加してください: `sudo usermod -aG video,input $USER`
-> - 常に全画面表示になります。`WAYLAND_DISPLAY` / `DISPLAY` の指定は不要です。
-*(※SSH 経由で直接 `rx` を起動する場合も、上記と同様に `WAYLAND_DISPLAY` または `DISPLAY` 環境変数が必要です)*
+- ブラウザで `http://<ホスト>:8000/` を開きます。
+- UIでは、ソースの検出、RXの開始と切り替え、TXの開始と停止、マルチビューとサイネージの操作、ブラウザでのプレビュー、プリセットと自動起動の設定ができます。
+- 設定は `~/.config/utone-ndi/settings.json` に保存されます。サイネージ画像は `data/signage/` に保存され、場所は `--data` で変更できます。
 
-### 3. NDIソースの送信 (TX)
+主なオプション：
+
+| オプション | 説明 |
+|---|---|
+| `--video-driver kmsdrm` | UIから起動するRX・マルチビュー・サイネージの表示ドライバ。デフォルトの `kmsdrm`、`auto`、`wayland`、`x11` から選ぶ |
+| `--extra-ips 10.0.0.5,10.0.0.6` | mDNSが使えないネットワークで、これらのホストに直接ソースを問い合わせる |
+| `--max-webrtc 4` | WebRTCプレビューの同時接続数の上限 |
+| `--static DIR` / `--engine PATH` | UIのビルド結果や `moip-engine` の場所を指定する |
+
+### 2. NDIソースの受信・全画面表示（RX）
+
 ```bash
-$ uv run main.py tx
+$ ./bin/moip rx -s "<NDIソース名>"
 ```
-接続されているカメラ・マイクデバイスの確認:
+
+ソースは、`HOST (STREAM)` 形式のフルネームでも、ストリーム名だけでも指定できます。`-s` を省略するとネットワーク上を検索し、一覧から選んで起動できます。`Esc` キーで終了します。
+
+その他のオプション：
+
+| オプション | 説明 |
+|---|---|
+| `--recv-fmt uyvy` | 受信形式。デフォルトの `uyvy` はGPUで変換するので最速。`rgb`、`bgr` も選べる |
+| `--recv-bandwidth highest` | `highest` または `lowest` |
+| `--banner-seconds 30` | IPアドレスのバナーを表示する秒数 |
+| `--fullscreen` | デスクトップ上で全画面にする。KMS/DRMでは常に全画面 |
+
+### 3. キャプチャデバイスの送信（TX）
+
 ```bash
-$ uv run main.py tx --list-devices
+$ ./bin/moip devices      # カメラ、キャプチャボード、音声入力の一覧
+$ ./bin/moip tx -n TX -d 0 --width 1920 --height 1080 --fps 30 -a "plughw:CARD=PCH,DEV=0"
+$ ./bin/moip tx -n BARS -d -1 --fps 59.94 --no-audio   # 時計付きのカラーバー
 ```
 
-### 4. マルチビューア (Multiview)
-複数のNDIソースを自動レイアウトのグリッドで同時に監視できます。
+- `-d` には、`/dev/videoN` を表すV4L2デバイスの番号、デバイスのパス、内蔵テストパターンを表す `-1` のいずれかを指定します。
+- `--input-format auto|yuyv|uyvy|mjpg` でキャプチャ形式を選びます。`auto` は、要求した解像度とフレームレートをデバイスが非圧縮で出せる場合は非圧縮を使い、出せない場合はMJPEGを使います。
+- 映像は常にNDIのネイティブ形式であるUYVYで送信します。音声はALSAから取り込み、`-a default` でシステムの既定の入力を使います。
+
+### 4. マルチビュー
+
 ```bash
-$ uv run main.py multiview --fullscreen
-$ uv run main.py multiview -s CAM1 -s CAM2   # 指定したソースのみ
+$ ./bin/moip multiview                   # 検出したすべてのソースを、増減に合わせて並べ直して表示
+$ ./bin/moip multiview -s CAM1 -s CAM2   # 指定したソースだけ
 ```
-`-s` を省略した場合は、検出されたすべてのソースを表示します。
 
-### 5. デジタルサイネージ (Signage)
-Web UI から画像をアップロードし、接続されたディスプレイに直接全画面表示できます。  
-CLIから直接画像ファイルを指定して全画面表示することも可能です:
+各タイルにはソース名とL/Rの音声メーターを表示します。タイルが3枚以上のときは、CPU負荷を抑えるためにNDIの低帯域なプロキシストリームを使います。`--recv-bandwidth highest` を指定すると、常に最高画質で受信します。
+
+### 5. デジタルサイネージ
+
+Web UIから画像をアップロードし、接続したディスプレイに全画面表示します。コマンドラインから画像を指定して表示することもできます。
+
 ```bash
-$ uv run main.py signage -i /path/to/image.png --fullscreen
-```
-*(※`-i` を省略した場合は、Web UI等でアップロードされた最新の画像が表示されます)*
-
-#### CLI環境（TTY）での表示
-`--framebuffer` オプションを使用すると、SDL2/OpenGLの代わりにLinuxフレームバッファ（`/dev/fb0`）に直接描画します。SSH接続やコンソール（TTY）などのGUI環境がない場合でも表示できます。
-```bash
-$ uv run main.py signage -i /path/to/image.png --framebuffer
-```
-- `--fb-device` オプションでフレームバッファデバイスのパスを変更できます（デフォルト: `/dev/fb0`）
-- フレームバッファへの書き込みにはroot権限が必要な場合があります
-
----
-
-## ディレクトリ構成
-```
-moip-toolkit/
-├── core/                   # 低レベル共通コアロジック
-│   ├── rx.py               # SDL2初期化、OpenGL描画、フレーム同期、NDI受信定義
-│   ├── reconnecting_receiver.py # 再接続・停止復旧つきNDIレシーバー
-│   ├── tx.py               # カメラ取得スレッド、映像/音声NDI送信スレッド
-│   ├── multiview.py        # 複数NDIグリッド表示ロジック
-│   └── signage.py          # SDL2/OpenGLまたはLinuxフレームバッファによる画像サイネージ描画
-├── cli/                    # コマンドラインUI定義
-│   ├── menu.py             # 対話型NDIソース選択メニュー
-│   ├── rx_cmd.py           # rx コマンド定義
-│   ├── tx_cmd.py           # tx コマンド定義
-│   ├── multiview_cmd.py    # multiview コマンド定義
-│   └── signage_cmd.py      # signage コマンド定義
-├── backend/                # FastAPI Web API & プロセス制御
-│   ├── models.py           # Pydantic スキーマ
-│   ├── ndi_scanner.py      # NDIソース自動探索サービス
-│   ├── devices.py          # カメラ・オーディオデバイス検出
-│   ├── rx_runner.py        # RXプロセスコントローラー
-│   ├── tx_runner.py        # TXプロセスコントローラー
-│   ├── multiview_runner.py # マルチビュープロセスコントローラー
-│   ├── signage_runner.py   # サイネージプロセスコントローラー
-│   ├── webrtc_manager.py   # WebRTC低遅延プレビューマネージャー
-│   ├── preview_manager.py  # オンデマンドMJPEGプレビュー配信
-│   ├── settings.py         # サーバー設定の永続化 (JSON)
-│   ├── system_monitor.py   # 軽量システムリソースモニター
-│   └── main.py             # REST APIエンドポイント
-├── data/
-│   └── signage/            # アップロードされたサイネージ画像保存先
-├── frontend/               # Nuxt 3 / Vue 3 管理Webダッシュボード
-├── main.py                 # 統合CLIエントリーポイント (rx / tx / multiview / signage / web)
-├── requirements.txt
-└── systemd-example/        # systemd用ユニット設定例
+$ ./bin/moip signage /path/to/image.png
+$ ./bin/moip signage /path/to/image.png --framebuffer   # Linux フレームバッファに表示。GPU 不要
 ```
 
----
+フレームバッファのデバイスは `--fb-device` で指定でき、デフォルトは `/dev/fb0` です。フレームバッファへの書き込みには `video` グループへの所属が必要です。
 
-## 自動起動設定 (systemd)
-Systemdを使用して自動起動する場合は、以下の手順を実行します。GUIなしの環境でも動作します。  
-`ExecStart` と `WorkingDirectory` のパスを環境に合わせて設定してください。  
-TX用 (`ndi-tx.service`) とWeb UI用 (`ndi-web.service`) のユニットファイルも `systemd-example/` に用意しています。
+## systemd による自動起動
+
+`systemd-example/` に、ユーザーユニットの例として `moip-rx.service`、`moip-tx.service`、`moip-web.service` があります。`ExecStart` を環境に合わせて編集してください。
+
 ```bash
 $ mkdir -p ~/.config/systemd/user
-$ cp systemd-example/ndi-rx.service ~/.config/systemd/user/
-$ vim ~/.config/systemd/user/ndi-rx.service
-```
-
-自動起動を有効にします。
-```bash
+$ cp systemd-example/moip-rx.service ~/.config/systemd/user/
+$ vim ~/.config/systemd/user/moip-rx.service
 $ systemctl --user daemon-reload
-$ systemctl --user enable --now ndi-rx.service
+$ systemctl --user enable --now moip-rx.service
 ```
 
-システム起動時にログインなしで自動起動する場合は、lingerを有効にします。
+ログインせずに起動時から動かすには、lingerを有効にします。
+
 ```bash
-$ sudo loginctl enable-linger username
+$ sudo loginctl enable-linger $USER
 ```
+
+`moip-web.service` を使う場合は、代わりにWeb UIの設定でRX / TXの自動起動を有効にすることもできます。
+
+## REST API
+
+すべてのエンドポイントは `/api` 以下にあります。エラーは `{"detail": "..."}` の形式で返します。
+
+| メソッド | パス | 説明 |
+|---|---|---|
+| GET | `/api/events` | 状態全体を送るServer-Sent Events。`sources`、`rx`、`tx`、`multiview`、`signage`、`system`、`settings` を、変化があったときに送る |
+| GET | `/api/ndi/sources` | ネットワーク上で見つかったソース |
+| GET | `/api/ndi/preview?source=&fps=&width=` | MJPEGプレビュー |
+| POST | `/api/webrtc/offer` | WebRTCプレビュー。`{source, sdp, type}` を送ると、H.264トラック付きのSDPアンサーを返す |
+| GET | `/api/devices/video`、`/api/devices/audio` | キャプチャデバイス |
+| GET/POST | `/api/rx/status`、`/api/rx/start`、`/api/rx/switch`、`/api/rx/stop` | 受信 |
+| GET/POST | `/api/tx/status`、`/api/tx/start`、`/api/tx/stop` | 送信 |
+| GET/POST | `/api/multiview/status`、`/api/multiview/start`、`/api/multiview/stop` | マルチビュー |
+| GET/POST/DELETE | `/api/signage/images`、`/api/signage/upload`、`/api/signage/image/{filename}` | サイネージ画像 |
+| GET/POST | `/api/signage/status`、`/api/signage/start`、`/api/signage/stop` | サイネージの表示 |
+| GET/POST | `/api/system/status`、`/api/settings` | システム負荷、プリセットと自動起動 |
+
+RX・マルチビュー・サイネージはディスプレイを共有するため、どれかを起動すると他は停止します。
+
+## ディレクトリ構成
+
+```
+moip-toolkit/
+├── engine/                 # Rust ワークスペース
+│   ├── ndi/                # 実行時に読み込む NDI SDK バインディング
+│   └── moip-engine/src/
+│       ├── rx.rs           # 全画面ビューア
+│       ├── recv.rs         # キャプチャスレッド、ストール時の復旧、音声メーター
+│       ├── gfx.rs          # SDL2/OpenGL ウィンドウ、UYVY シェーダ、ラベル
+│       ├── tx.rs           # 送信。V4L2 またはテストパターンと ALSA
+│       ├── multiview.rs    # グリッド表示
+│       ├── signage.rs      # GL またはフレームバッファへの画像表示
+│       ├── preview.rs      # ブラウザ向けの H.264 / JPEG プレビュー
+│       └── control.rs      # サーバーとの標準入出力 JSON プロトコル
+├── server/                 # Go モジュール
+│   ├── cmd/moip/           # moip コマンド。Web サーバーとエンジンの起動
+│   └── internal/           # api, jobs, preview, sources, settings, sysmon, engine
+├── frontend/               # Nuxt 3 / Vue 3 の Web UI
+├── scripts/                # install-ndi-sdk.sh
+├── data/signage/           # アップロードされたサイネージ画像
+├── systemd-example/        # systemd ユーザーユニットの例
+└── Makefile
+```
+
+## ライセンス
+
+moip-toolkitは [MIT License](LICENSE) で公開しています。NDI SDKとランタイムはNDI SDKのライセンスに従い、このリポジトリには含まれません。NDI® はVizrt NDI ABの登録商標です。
