@@ -10,6 +10,7 @@ mod discover;
 mod font;
 mod gfx;
 mod recv;
+mod rx;
 
 use clap::{Parser, Subcommand};
 
@@ -40,6 +41,8 @@ enum Cmd {
         #[arg(long)]
         extra_ips: Option<String>,
     },
+    /// Receive an NDI source and display it (fullscreen viewer).
+    Rx(rx::Args),
 }
 
 fn main() {
@@ -49,6 +52,7 @@ fn main() {
         Cmd::Discover { once, timeout, extra_ips } => {
             discover::run(discover::Args { once, timeout, extra_ips, control: cli.control })
         }
+        Cmd::Rx(args) => rx::run(args, cli.control),
     };
     if let Err(e) = result {
         if cli.control {
