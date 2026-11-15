@@ -1,11 +1,12 @@
 [Unit]
-Description=NDI Receiver (SDL2)
-After=network.target
+Description=moip-toolkit NDI receiver
+After=network-online.target avahi-daemon.service
+Wants=network-online.target
 
 [Service]
-ExecStart=%h/moip-toolkit/.venv/bin/python %h/moip-toolkit/main.py rx -s "__SOURCE_NAME__" --fullscreen
+ExecStart=%h/moip-toolkit/bin/moip rx -s "__SOURCE_NAME__" --fullscreen
 # Lowest latency on a dedicated display machine (no desktop session; user in `video` and `input` groups):
-#ExecStart=%h/moip-toolkit/.venv/bin/python %h/moip-toolkit/main.py rx -s "__SOURCE_NAME__" --fullscreen --video-driver kmsdrm
+#ExecStart=%h/moip-toolkit/bin/moip rx -s "__SOURCE_NAME__" --video-driver kmsdrm
 WorkingDirectory=%h/moip-toolkit
 Restart=always
 RestartSec=3

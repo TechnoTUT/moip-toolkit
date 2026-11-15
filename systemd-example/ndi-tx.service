@@ -1,9 +1,11 @@
 [Unit]
-Description=NDI Sender
-After=network.target
+Description=moip-toolkit NDI sender
+After=network-online.target avahi-daemon.service
+Wants=network-online.target
 
 [Service]
-ExecStart=%h/moip-toolkit/.venv/bin/python %h/moip-toolkit/main.py tx
+# See `moip tx -h` and `moip devices` for the device options.
+ExecStart=%h/moip-toolkit/bin/moip tx -n TX -d 0 --width 1920 --height 1080 --fps 30
 WorkingDirectory=%h/moip-toolkit
 Restart=always
 RestartSec=3

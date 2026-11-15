@@ -1,11 +1,12 @@
 [Unit]
-Description=NDI Web GUI (FastAPI)
-After=network.target
+Description=moip-toolkit web UI
+After=network-online.target avahi-daemon.service
+Wants=network-online.target
 
 [Service]
-ExecStart=%h/moip-toolkit/.venv/bin/python %h/moip-toolkit/main.py web
+ExecStart=%h/moip-toolkit/bin/moip web --host 0.0.0.0 --port 8000
 # Lowest latency on a dedicated display machine (no desktop session; user in `video` and `input` groups):
-#ExecStart=%h/moip-toolkit/.venv/bin/python %h/moip-toolkit/main.py web --video-driver kmsdrm
+#ExecStart=%h/moip-toolkit/bin/moip web --host 0.0.0.0 --port 8000 --video-driver kmsdrm
 WorkingDirectory=%h/moip-toolkit
 Restart=always
 RestartSec=3
