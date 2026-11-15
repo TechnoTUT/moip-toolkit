@@ -12,6 +12,7 @@ mod devices;
 mod discover;
 mod font;
 mod gfx;
+mod memstats;
 mod multiview;
 mod preview;
 mod recv;

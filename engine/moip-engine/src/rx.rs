@@ -163,6 +163,7 @@ pub fn run(args: Args, control: bool) -> Result<()> {
     let mut shown_at_status = 0u64;
     let mut recv_at_status = 0u64;
     let mut latency_ms: Option<f64> = None;
+    let mut memstats = crate::memstats::MemStats::new();
 
     'main: loop {
         for ev in win.poll() {
@@ -228,6 +229,7 @@ pub fn run(args: Args, control: bool) -> Result<()> {
             win.swap();
         }
 
+        memstats.tick();
         if last_status.elapsed() >= Duration::from_millis(500) {
             let dt = last_status.elapsed().as_secs_f64();
             let fps_real = (shown - shown_at_status) as f64 / dt;
