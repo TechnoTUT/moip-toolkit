@@ -7,6 +7,8 @@
 
 mod control;
 mod discover;
+mod font;
+mod gfx;
 
 use clap::{Parser, Subcommand};
 
