@@ -96,7 +96,7 @@ struct VideoBuf {
 struct Status<'a> {
     r#type: &'static str,
     sender_name: &'a str,
-    video_device: &'a str,
+    video_input: &'a str,
     audio_device: Option<&'a str>,
     no_audio: bool,
     input_format: &'a str,
@@ -222,7 +222,7 @@ pub fn run(args: Args, control: bool) -> Result<()> {
             let status = Status {
                 r#type: "status",
                 sender_name: &args.name,
-                video_device: &args.video_device,
+                video_input: &args.video_device,
                 audio_device: (!args.no_audio).then_some(args.audio_device.as_str()),
                 no_audio: args.no_audio,
                 input_format: &input_name,
