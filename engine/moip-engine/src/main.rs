@@ -9,6 +9,7 @@ mod control;
 mod discover;
 mod font;
 mod gfx;
+mod recv;
 
 use clap::{Parser, Subcommand};
 
