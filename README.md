@@ -1,22 +1,28 @@
 # moip-toolkit
 
+**English** | [日本語](README.ja.md)
+
 moip-toolkit moves the video transport of the DJ event "The Utopia Tone" onto an IP network using [NDI](https://ndi.video/).
 It receives NDI sources and shows them fullscreen with minimal latency, sends capture devices as NDI sources, shows several sources in a multiview grid, and displays still images as digital signage. Everything can be controlled from a browser UI or a REST API.
 
 ## Architecture
 
-```
- Browser (Vue / Nuxt UI)
-        │  HTTP, Server-Sent Events, MJPEG, WebRTC
-        ▼
- moip web ─────────── Go server (server/)
-        │  JSON lines over stdin/stdout, one process per job
-        ▼
- moip-engine ──────── Rust media engine (engine/)
-   rx · tx · multiview · signage · preview · discover · devices
-        │  dlopen at run time
-        ▼
- libndi.so.6 ──────── NDI SDK runtime (installed separately, not in this repository)
+```mermaid
+flowchart TD
+    browser["Browser<br/>(Nuxt / Vue web UI)"]
+    server["<b>moip web</b><br/>Go server (server/)"]
+    engine["<b>moip-engine</b><br/>Rust media engine (engine/)<br/>rx · tx · multiview · signage · preview · discover · devices"]
+    ndi["libndi.so.6<br/>NDI SDK runtime<br/>(installed separately, not in this repository)"]
+    display["Display<br/>(SDL2 / OpenGL, KMS/DRM)"]
+    capture["Capture devices<br/>(V4L2 video, ALSA audio)"]
+    lan["NDI sources and receivers on the LAN"]
+
+    browser -- "HTTP · Server-Sent Events · MJPEG · WebRTC" --> server
+    server -- "JSON lines over stdin/stdout<br/>one process per job" --> engine
+    engine -- "dlopen at run time" --> ndi
+    ndi <-- "NDI" --> lan
+    engine --> display
+    capture --> engine
 ```
 
 - **engine/** (Rust) does all the media work. It calls the NDI SDK directly, so there is no interpreter lock and no framesync buffering in the receive path: frames are uploaded to the GPU as soon as they arrive, and UYVY is converted to RGB in a shader. A stalled receiver is replaced at once and the old one is torn down on a background thread.
