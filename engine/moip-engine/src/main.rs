@@ -13,6 +13,7 @@ mod discover;
 mod font;
 mod gfx;
 mod multiview;
+mod preview;
 mod recv;
 mod rx;
 mod signage;
@@ -52,6 +53,8 @@ enum Cmd {
     Rx(rx::Args),
     /// Show several NDI sources in a grid.
     Multiview(multiview::Args),
+    /// Encode a low-rate browser preview of a source (binary output, for the server).
+    Preview(preview::Args),
     /// List video (V4L2) and audio (ALSA) capture devices as JSON.
     Devices,
     /// Show a still image fullscreen (digital signage).
@@ -69,6 +72,7 @@ fn main() {
         }
         Cmd::Rx(args) => rx::run(args, cli.control),
         Cmd::Devices => devices::run(),
+        Cmd::Preview(args) => preview::run(args, cli.control),
         Cmd::Multiview(args) => multiview::run(args, cli.control),
         Cmd::Signage(args) => signage::run(args, cli.control),
         Cmd::Tx(args) => tx::run(args, cli.control),
