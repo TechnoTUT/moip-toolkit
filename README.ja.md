@@ -235,7 +235,7 @@ RX・マルチビュー・サイネージはディスプレイを共有するた
 moip-toolkit/
 ├── engine/                 # Rust ワークスペース (submodule: TechnoTUT/moip-engine)
 │   ├── ndi/                # 実行時に読み込む NDI SDK バインディング
-│   └── moip-engine/src/
+│   └── src/                # moip-engine バイナリ
 │       ├── rx.rs           # 全画面ビューア
 │       ├── recv.rs         # キャプチャスレッド、ストール時の復旧、音声メーター
 │       ├── gfx.rs          # SDL2/OpenGL ウィンドウ、UYVY シェーダ、ラベル

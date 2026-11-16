@@ -235,7 +235,7 @@ RX, multiview and signage share the display, so starting one of them stops the o
 moip-toolkit/
 ├── engine/                 # Rust workspace (submodule: TechnoTUT/moip-engine)
 │   ├── ndi/                # NDI SDK bindings, loaded at run time
-│   └── moip-engine/src/
+│   └── src/                # moip-engine binary
 │       ├── rx.rs           # fullscreen viewer
 │       ├── recv.rs         # capture thread, stall recovery, audio meter
 │       ├── gfx.rs          # SDL2/OpenGL window, UYVY shader, labels
