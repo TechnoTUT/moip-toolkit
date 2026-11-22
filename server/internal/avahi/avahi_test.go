@@ -15,6 +15,7 @@ type fakeSession struct {
 	events     chan EventKind
 	altErr     error
 	regErr     error
+	regErrs    []error // returned by successive Register calls before regErr applies
 }
 
 func newFake() *fakeSession { return &fakeSession{events: make(chan EventKind, 4)} }
@@ -22,7 +23,13 @@ func newFake() *fakeSession { return &fakeSession{events: make(chan EventKind, 4
 func (f *fakeSession) Register(name string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.regErr != nil {
+	if len(f.regErrs) > 0 {
+		err := f.regErrs[0]
+		f.regErrs = f.regErrs[1:]
+		if err != nil {
+			return err
+		}
+	} else if f.regErr != nil {
 		return f.regErr
 	}
 	f.registered = append(f.registered, name)
@@ -129,5 +136,25 @@ func TestFailureAndRegisterErrorsAreRetried(t *testing.T) {
 	waitFor(t, "registration after a register error", func() bool { return len(good.names()) == 1 })
 	if !bad.isClosed() {
 		t.Fatal("the failed session must be closed")
+	}
+}
+
+func TestNameInUseOnThisHostIsRegisteredUnderAnAlternative(t *testing.T) {
+	f := newFake()
+	f.regErrs = []error{ErrCollision, ErrCollision} // taken twice, then free
+	run(t, ok(f))
+	waitFor(t, "registration", func() bool { return len(f.names()) == 1 })
+	if got := f.names()[0]; got != "utone-a-2-2" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestGivesUpAfterTooManyCollisionsAndRetriesLater(t *testing.T) {
+	bad, good := newFake(), newFake()
+	bad.regErr = ErrCollision
+	run(t, ok(bad), ok(good))
+	waitFor(t, "a fresh session after giving up", func() bool { return len(good.names()) == 1 })
+	if !bad.isClosed() {
+		t.Fatal("the stuck session must be closed")
 	}
 }
