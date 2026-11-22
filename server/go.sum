@@ -1,3 +1,5 @@
+github.com/godbus/dbus/v5 v5.2.4 h1:F2gUCy++NMIxGmo9J+z5le/+ZC8W1OgeR51P4i9ZB/U=
+github.com/godbus/dbus/v5 v5.2.4/go.mod h1:3AAv2+hPq5rdnr5txxxRwiGjPXamgoIHgz9FPBfOp3c=
 github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
 github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
 github.com/pion/datachannel v1.6.3 h1:HZAYLpunVI0xi057ZiANl558d0uSpomcWw4UEPz3qXs=
