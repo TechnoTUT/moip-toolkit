@@ -8,6 +8,7 @@
 
 CARGO ?= cargo
 GO    ?= go
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 NPM   ?= npm
 
 .PHONY: all engine server frontend test clean submodules
@@ -25,7 +26,7 @@ engine: submodules
 
 server:
 	mkdir -p bin
-	cd server && $(GO) build -trimpath -o ../bin/moip ./cmd/moip
+	cd server && $(GO) build -trimpath -ldflags "-X main.version=$(VERSION)" -o ../bin/moip ./cmd/moip
 
 frontend:
 	cd frontend && $(NPM) ci && $(NPM) run build

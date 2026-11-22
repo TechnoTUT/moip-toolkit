@@ -138,7 +138,11 @@ Useful flags:
 | `--video-driver kmsdrm` | Display driver for RX, multiview and signage started from the UI: `kmsdrm` by default, `auto`, `wayland` or `x11` |
 | `--extra-ips 10.0.0.5,10.0.0.6` | Query these hosts for sources directly, for networks without mDNS |
 | `--max-webrtc 4` | Maximum number of concurrent WebRTC previews |
+| `--node-id <id>` | ID this node reports to a controller. Defaults to the hostname, so give every node a unique hostname |
+| `--advertise=false` | Do not advertise the node over mDNS |
 | `--static DIR` / `--engine PATH` | Override where the UI build and `moip-engine` are found |
+
+While `moip web` runs it advertises itself as `_moip._tcp` through `avahi-daemon` (over D-Bus), with the TXT records `id`, `hostname` and `version`, so that a controller such as [moipctl](https://github.com/TechnoTUT/moipctl) can find it without knowing its IP address. If `avahi-daemon` is not running yet, or restarts, the registration is retried.
 
 ### 2. Receive and display a source (RX)
 
@@ -226,6 +230,7 @@ All endpoints are under `/api`. Errors are returned as `{"detail": "..."}`.
 | GET/POST/DELETE | `/api/signage/images`, `/api/signage/upload`, `/api/signage/image/{filename}` | Signage images |
 | GET/POST | `/api/signage/status`, `/api/signage/start`, `/api/signage/stop` | Signage display |
 | GET/POST | `/api/system/status`, `/api/settings` | System load, presets and auto-start |
+| GET | `/api/node/info` | `id`, `hostname`, `version` and `roles` of this node, for a controller |
 
 RX, multiview and signage share the display, so starting one of them stops the others.
 

@@ -138,7 +138,11 @@ $ ./bin/moip web --host 0.0.0.0 --port 8000
 | `--video-driver kmsdrm` | UIから起動するRX・マルチビュー・サイネージの表示ドライバ。デフォルトの `kmsdrm`、`auto`、`wayland`、`x11` から選ぶ |
 | `--extra-ips 10.0.0.5,10.0.0.6` | mDNSが使えないネットワークで、これらのホストに直接ソースを問い合わせる |
 | `--max-webrtc 4` | WebRTCプレビューの同時接続数の上限 |
+| `--node-id <id>` | コントローラに報告するこのノードのID。既定はホスト名なので、ノードごとに一意なホスト名にする |
+| `--advertise=false` | mDNSでのノード広告をしない |
 | `--static DIR` / `--engine PATH` | UIのビルド結果や `moip-engine` の場所を指定する |
+
+`moip web` の実行中は、`avahi-daemon`(D-Bus経由)を通じて `_moip._tcp` としてノード自身を広告します。TXTレコードは `id`、`hostname`、`version` です。[moipctl](https://github.com/TechnoTUT/moipctl) のようなコントローラが、IPアドレスを知らなくてもノードを見つけられます。`avahi-daemon` がまだ起動していない場合や再起動した場合は、登録をやり直します。
 
 ### 2. NDIソースの受信・全画面表示（RX）
 
@@ -226,6 +230,7 @@ $ sudo loginctl enable-linger $USER
 | GET/POST/DELETE | `/api/signage/images`、`/api/signage/upload`、`/api/signage/image/{filename}` | サイネージ画像 |
 | GET/POST | `/api/signage/status`、`/api/signage/start`、`/api/signage/stop` | サイネージの表示 |
 | GET/POST | `/api/system/status`、`/api/settings` | システム負荷、プリセットと自動起動 |
+| GET | `/api/node/info` | コントローラ向けに、このノードの `id`、`hostname`、`version`、`roles` を返す |
 
 RX・マルチビュー・サイネージはディスプレイを共有するため、どれかを起動すると他は停止します。
 

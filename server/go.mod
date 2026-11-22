@@ -3,6 +3,7 @@ module github.com/TechnoTUT/moip-toolkit/server
 go 1.24.4
 
 require (
+	github.com/godbus/dbus/v5 v5.2.4
 	github.com/pion/rtcp v1.2.20
 	github.com/pion/webrtc/v4 v4.2.26
 )
