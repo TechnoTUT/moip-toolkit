@@ -10,9 +10,19 @@ package avahi
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log"
 	"time"
 )
+
+// ErrCollision is returned by Session.Register when avahi refuses the name
+// because it is already in use on this host. (A collision with another host
+// is reported later, as the Collision event.)
+var ErrCollision = errors.New("avahi: service name already in use")
+
+// maxRenames bounds how many alternative names are tried in a row.
+const maxRenames = 8
 
 // Service is what is advertised.
 type Service struct {
@@ -80,6 +90,24 @@ func (a *Advertiser) Run(ctx context.Context) {
 	}
 }
 
+// register publishes under name, or under alternative names while avahi
+// reports that the name is in use. It returns the name that was registered.
+func (a *Advertiser) register(s Session, name string) (string, error) {
+	for range maxRenames {
+		err := s.Register(name)
+		if !errors.Is(err, ErrCollision) {
+			return name, err
+		}
+		alt, altErr := s.AltName(name)
+		if altErr != nil {
+			return "", altErr
+		}
+		log.Printf("avahi: name %q is taken, using %q", name, alt)
+		name = alt
+	}
+	return "", fmt.Errorf("no free service name after %d tries (last %q)", maxRenames, name)
+}
+
 type errString string
 
 func (e errString) Error() string { return string(e) }
@@ -93,8 +121,8 @@ func (a *Advertiser) once(ctx context.Context) error {
 	}
 	defer s.Close()
 
-	name := a.Service.Name
-	if err := s.Register(name); err != nil {
+	name, err := a.register(s, a.Service.Name)
+	if err != nil {
 		return err
 	}
 	log.Printf("avahi: advertising %s as %q on port %d", a.Service.Type, name, a.Service.Port)
@@ -110,8 +138,7 @@ func (a *Advertiser) once(ctx context.Context) error {
 					return err
 				}
 				log.Printf("avahi: name %q is taken, using %q", name, alt)
-				name = alt
-				if err := s.Register(name); err != nil {
+				if name, err = a.register(s, alt); err != nil {
 					return err
 				}
 			case Gone:

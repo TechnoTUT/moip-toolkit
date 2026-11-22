@@ -1,6 +1,7 @@
 package avahi
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/godbus/dbus/v5"
@@ -13,6 +14,8 @@ const (
 	ifGroup     = "org.freedesktop.Avahi.EntryGroup"
 	ifUnspec    = int32(-1) // IF_UNSPEC: all interfaces
 	protoUnspec = int32(-1) // PROTO_UNSPEC: IPv4 and IPv6
+
+	errCollision = "org.freedesktop.Avahi.CollisionError"
 
 	groupCollision = int32(3) // AVAHI_ENTRY_GROUP_COLLISION
 	groupFailure   = int32(4) // AVAHI_ENTRY_GROUP_FAILURE
@@ -114,6 +117,12 @@ func (s *dbusSession) Register(name string) error {
 	}
 	if err := s.group.Call(ifGroup+".AddService", 0,
 		ifUnspec, protoUnspec, uint32(0), name, s.svc.Type, "", "", s.svc.Port, txt).Err; err != nil {
+		// avahi answers a name that is already used on this host with an
+		// error here, not with a state change.
+		var de dbus.Error
+		if errors.As(err, &de) && de.Name == errCollision {
+			return fmt.Errorf("AddService %q: %w", name, ErrCollision)
+		}
 		return fmt.Errorf("AddService: %w", err)
 	}
 	if err := s.group.Call(ifGroup+".Commit", 0).Err; err != nil {
