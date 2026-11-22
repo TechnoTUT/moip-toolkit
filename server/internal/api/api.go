@@ -38,6 +38,7 @@ type Server struct {
 	Sys        *sysmon.Monitor
 	SignageDir string
 	StaticDir  string
+	Info       model.NodeInfo
 
 	// Ctx is cancelled on shutdown; long-lived streams end with it.
 	Ctx context.Context
@@ -45,6 +46,7 @@ type Server struct {
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/node/info", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, s.Info) })
 	mux.HandleFunc("GET /api/events", s.events)
 	mux.HandleFunc("GET /api/system/status", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, s.Sys.Status()) })
 	mux.HandleFunc("GET /api/ndi/sources", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, s.sources()) })

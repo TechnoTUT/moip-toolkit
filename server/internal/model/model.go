@@ -24,6 +24,16 @@ type AudioDevice struct {
 	DefaultSamplerate float64 `json:"default_samplerate"`
 }
 
+// NodeInfo identifies this node to a controller (GET /api/node/info).
+type NodeInfo struct {
+	// ID is stable across reboots and address changes; it defaults to the hostname.
+	ID       string `json:"id"`
+	Hostname string `json:"hostname"`
+	Version  string `json:"version"`
+	// Roles lists what the node can do: rx, tx, multiview, signage.
+	Roles []string `json:"roles"`
+}
+
 type SystemStatus struct {
 	CPUPercent float64    `json:"cpu_percent"`
 	MemPercent float64    `json:"mem_percent"`

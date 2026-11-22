@@ -21,13 +21,18 @@ import (
 	"time"
 
 	"github.com/TechnoTUT/moip-toolkit/server/internal/api"
+	"github.com/TechnoTUT/moip-toolkit/server/internal/avahi"
 	"github.com/TechnoTUT/moip-toolkit/server/internal/engine"
 	"github.com/TechnoTUT/moip-toolkit/server/internal/jobs"
+	"github.com/TechnoTUT/moip-toolkit/server/internal/model"
 	"github.com/TechnoTUT/moip-toolkit/server/internal/preview"
 	"github.com/TechnoTUT/moip-toolkit/server/internal/settings"
 	"github.com/TechnoTUT/moip-toolkit/server/internal/sources"
 	"github.com/TechnoTUT/moip-toolkit/server/internal/sysmon"
 )
+
+// version is set at build time: -ldflags "-X main.version=v1.2.3".
+var version = "dev"
 
 const usage = `moip-toolkit
 
@@ -105,6 +110,8 @@ func runWeb(args []string) error {
 	settingsPath := fs.String("settings", settings.DefaultPath(), "settings file")
 	extraIPs := fs.String("extra-ips", "", "comma-separated IPs to query for NDI sources (networks without mDNS)")
 	maxWebRTC := fs.Int("max-webrtc", 4, "maximum concurrent WebRTC previews")
+	nodeID := fs.String("node-id", "", "ID this node reports to a controller (default: the hostname)")
+	advertise := fs.Bool("advertise", true, "advertise this node as _moip._tcp over mDNS through avahi-daemon")
 	_ = fs.Parse(args)
 
 	p, err := engine.Locate(*enginePath)
@@ -148,6 +155,21 @@ func runWeb(args []string) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
+	hostname, _ := os.Hostname()
+	if *nodeID == "" {
+		*nodeID = hostname
+	}
+	info := model.NodeInfo{ID: *nodeID, Hostname: hostname, Version: version,
+		Roles: []string{"rx", "tx", "multiview", "signage"}}
+	if *advertise {
+		go avahi.New(avahi.Service{
+			Name: hostname,
+			Type: "_moip._tcp",
+			Port: uint16(*port),
+			TXT:  []string{"id=" + info.ID, "hostname=" + info.Hostname, "version=" + info.Version},
+		}).Run(ctx)
+	}
+
 	scanner := sources.New(*extraIPs)
 	scanner.Start()
 	srv := &api.Server{
@@ -158,6 +180,7 @@ func runWeb(args []string) error {
 		Sys:        sysmon.New(),
 		SignageDir: signageDir,
 		StaticDir:  *staticDir,
+		Info:       info,
 		Ctx:        ctx,
 	}
 
